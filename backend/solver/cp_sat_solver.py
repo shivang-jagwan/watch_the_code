@@ -131,6 +131,9 @@ def _solve_program(
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(max_time_seconds)
     solver.parameters.num_search_workers = 8
+    # Improve solution quality: allow solver to keep searching for better solutions
+    solver.parameters.linearization_level = 1
+    solver.parameters.log_search_progress = False
     if seed is not None:
         solver.parameters.random_seed = int(seed)
 

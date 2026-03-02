@@ -119,8 +119,8 @@ def _compute_warnings(ctx: SolverContext, solver: cp_model.CpSolver) -> None:
                 continue
             used = 0
             for term in ctx.teacher_all_terms.get(teacher_id, []):
-                if term == 1:
-                    used += 1
+                if isinstance(term, int):
+                    used += term
                 else:
                     used += int(solver.Value(term))
             if used >= int(0.9 * max_week):
@@ -140,8 +140,8 @@ def _compute_warnings(ctx: SolverContext, solver: cp_model.CpSolver) -> None:
                     ctx.fixed_theory_by_slot.get(slot_id, 0) or 0
                 )
                 for term in ctx.room_terms_by_slot.get(slot_id, []):
-                    if term == 1:
-                        used += 1
+                    if isinstance(term, int):
+                        used += term
                     else:
                         used += int(solver.Value(term))
                 max_used = max(max_used, used)
@@ -158,8 +158,8 @@ def _compute_warnings(ctx: SolverContext, solver: cp_model.CpSolver) -> None:
                     ctx.fixed_lab_by_slot.get(slot_id, 0) or 0
                 )
                 for term in ctx.lab_room_terms_by_slot.get(slot_id, []):
-                    if term == 1:
-                        used += 1
+                    if isinstance(term, int):
+                        used += term
                     else:
                         used += int(solver.Value(term))
                 max_used = max(max_used, used)
@@ -180,9 +180,9 @@ def _compute_solver_stats(ctx: SolverContext, solver: cp_model.CpSolver, status:
         "num_branches": int(getattr(solver, "NumBranches", lambda: 0)()),
         "num_conflicts": int(getattr(solver, "NumConflicts", lambda: 0)()),
         "status_name": (
-            cp_model.CpSolverStatus.Name(int(status))
-            if hasattr(cp_model, "CpSolverStatus") and hasattr(cp_model.CpSolverStatus, "Name")
-            else str(int(status))
+            {0: "UNKNOWN", 1: "MODEL_INVALID", 2: "FEASIBLE", 3: "INFEASIBLE", 4: "OPTIMAL"}.get(
+                int(status), str(int(status))
+            )
         ),
         "require_optimal": bool(ctx.require_optimal),
     }
@@ -291,9 +291,12 @@ def _compute_quality_score(ctx: SolverContext) -> None:
         scores["subject_spread"] = max(0.0, 100.0 * (1.0 - float(spread_violations) / max_spread))
 
         # 4. Daily balance
+        # With N sessions spread over D days, minimum spread is 0 (if N % D == 0) or 1.
+        # A realistic "bad" spread is ~5 per section; scale accordingly.
         balance_total = ctx.solver_stats.get("daily_load_spread_total", 0)
-        max_balance = max(1, len(ctx.sections) * 4)  # max spread ~4 per section
-        scores["daily_balance"] = max(0.0, 100.0 * (1.0 - float(balance_total) / max_balance))
+        # Use a gentler denominator: avg 2 spread per section is "acceptable"
+        max_balance = max(1, len(ctx.sections) * 6)
+        scores["daily_balance"] = max(0.0, min(100.0, 100.0 * (1.0 - float(balance_total) / max_balance)))
 
         # 5. Room fit: fraction without room conflicts
         total_entries = max(1, ctx.entries_written)

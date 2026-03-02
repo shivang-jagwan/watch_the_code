@@ -20,7 +20,7 @@ def add_objective(ctx: SolverContext) -> None:
     W_SECTION_GAP      = 500   # internal gaps hurt students the most
     W_SUBJECT_SPREAD   = 400   # spreading subjects across days aids learning
     W_TEACHER_GAP      = 300   # reduce wasted teacher wait-time
-    W_DAILY_BALANCE    = 200   # even-out heavy vs light days
+    W_DAILY_BALANCE    = 300   # even-out heavy vs light days
     W_EARLY_SLOT       =   1   # very light tiebreaker: prefer earlier starts
 
     model = ctx.model

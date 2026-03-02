@@ -14,6 +14,7 @@ RUN_STATUS = ENUM(
     "VALIDATION_FAILED",
     "INFEASIBLE",
     "FEASIBLE",
+    "SUBOPTIMAL",
     "OPTIMAL",
     "ERROR",
     name="run_status",

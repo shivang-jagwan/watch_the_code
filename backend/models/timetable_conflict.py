@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Column, DateTime, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.sql import func
 
@@ -22,8 +22,8 @@ class TimetableConflict(Base):
     __tablename__ = "timetable_conflicts"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
-    run_id = Column(UUID(as_uuid=True), nullable=False)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    run_id = Column(UUID(as_uuid=True), ForeignKey("timetable_runs.id", ondelete="CASCADE"), nullable=False)
     severity = Column(CONFLICT_SEVERITY, nullable=False, default="ERROR")
     conflict_type = Column(Text, nullable=False)
     message = Column(Text, nullable=False)

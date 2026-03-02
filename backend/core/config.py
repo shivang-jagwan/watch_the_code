@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic.aliases import AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+_config_logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -23,6 +26,21 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(
         default=480,
         validation_alias=AliasChoices("access_token_expire_minutes", "ACCESS_TOKEN_EXPIRE_MINUTES"),
+    )
+
+    # Refresh tokens — long-lived token used to rotate short-lived access tokens.
+    refresh_token_expire_minutes: int = Field(
+        default=10080,  # 7 days
+        validation_alias=AliasChoices("refresh_token_expire_minutes", "REFRESH_TOKEN_EXPIRE_MINUTES"),
+    )
+    refresh_token_secret_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "refresh_token_secret_key",
+            "REFRESH_TOKEN_SECRET_KEY",
+            "refresh_token_secret",
+            "REFRESH_TOKEN_SECRET",
+        ),
     )
 
     cookie_samesite: str = Field(
@@ -122,6 +140,23 @@ class Settings(BaseSettings):
             return None
         # Intentionally do not strip whitespace here: passwords can contain spaces.
         return v
+
+    @model_validator(mode="after")
+    def _validate_secrets(self) -> "Settings":
+        if len(self.jwt_secret_key) < 32:
+            if self.environment.lower() == "production":
+                raise ValueError(
+                    "JWT_SECRET_KEY must be at least 32 characters in production"
+                )
+            _config_logger.warning(
+                "JWT_SECRET_KEY is shorter than 32 characters — acceptable for dev only"
+            )
+        return self
+
+    @property
+    def effective_refresh_secret(self) -> str:
+        """Refresh token secret: separate key if configured, otherwise derived from JWT secret."""
+        return self.refresh_token_secret_key or (self.jwt_secret_key + ":refresh")
 
 
 settings = Settings()

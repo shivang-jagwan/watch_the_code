@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import threading
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -12,7 +13,13 @@ from sqlalchemy.orm import Session
 from api.deps import get_current_user
 from core.config import settings
 from core.db import get_db
-from core.security import create_access_token, hash_password, verify_password
+from core.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_refresh_token,
+    hash_password,
+    verify_password,
+)
 from models.tenant import Tenant
 from models.user import User
 from schemas.auth import LoginRequest, LoginResponse, MeResponse, SignupRequest, SignupResponse
@@ -23,12 +30,15 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-# Simple in-memory rate limiting for login.
-# NOTE: In multi-worker deployments this is per-worker. For enterprise-grade limiting,
-# put this behind a reverse proxy or use Redis-backed rate limiting.
+# ---------------------------------------------------------------------------
+# In-memory rate limiting for login (per-worker).
+# ---------------------------------------------------------------------------
 _LOGIN_WINDOW_SECONDS = 60
 _LOGIN_MAX_ATTEMPTS_PER_KEY = 12
 _login_attempts: dict[str, list[float]] = {}
+_rate_limit_lock = threading.Lock()
+_RATE_LIMIT_CLEANUP_INTERVAL = 300  # prune stale entries every 5 min
+_last_rate_limit_cleanup = 0.0
 
 
 def _rate_limit_key(request: Request, username: str) -> str:
@@ -36,13 +46,29 @@ def _rate_limit_key(request: Request, username: str) -> str:
     return f"{ip}:{username.lower().strip()}"
 
 
+def _prune_stale_entries(now: float) -> None:
+    """Remove entries older than the rate-limit window to prevent unbounded growth."""
+    global _last_rate_limit_cleanup
+    if now - _last_rate_limit_cleanup < _RATE_LIMIT_CLEANUP_INTERVAL:
+        return
+    _last_rate_limit_cleanup = now
+    stale_keys = [
+        k for k, v in _login_attempts.items()
+        if not v or (now - max(v)) > _LOGIN_WINDOW_SECONDS
+    ]
+    for k in stale_keys:
+        _login_attempts.pop(k, None)
+
+
 def _enforce_login_rate_limit(request: Request, username: str) -> None:
     key = _rate_limit_key(request, username)
     now = time.time()
-    history = _login_attempts.get(key, [])
-    history = [t for t in history if now - t < _LOGIN_WINDOW_SECONDS]
-    history.append(now)
-    _login_attempts[key] = history
+    with _rate_limit_lock:
+        history = _login_attempts.get(key, [])
+        history = [t for t in history if now - t < _LOGIN_WINDOW_SECONDS]
+        history.append(now)
+        _login_attempts[key] = history
+        _prune_stale_entries(now)
     if len(history) > _LOGIN_MAX_ATTEMPTS_PER_KEY:
         raise HTTPException(status_code=429, detail="RATE_LIMITED")
 
@@ -84,6 +110,37 @@ def _resolve_tenant_id_for_auth(
     if row is None:
         raise HTTPException(status_code=401, detail="INVALID_TENANT")
     return str(row[0])
+
+
+def _set_auth_cookies(
+    response: Response,
+    access_token: str,
+    refresh_token: str,
+) -> None:
+    """Set httponly access_token and refresh_token cookies on the response."""
+    secure_cookie = settings.environment.lower() == "production"
+    samesite = (settings.cookie_samesite or "lax").lower().strip()
+    if samesite not in {"lax", "strict", "none"}:
+        samesite = "lax"
+
+    response.set_cookie(
+        key="access_token",
+        value=access_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite=samesite,
+        max_age=settings.access_token_expire_minutes * 60,
+        path="/",
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite=samesite,
+        max_age=settings.refresh_token_expire_minutes * 60,
+        path="/api/auth",  # Scoped: only sent to auth endpoints
+    )
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -163,20 +220,12 @@ def login(
         role=user.role,
         tenant_id=token_tenant_id,
     )
-
-    secure_cookie = settings.environment.lower() == "production"
-    samesite = (settings.cookie_samesite or "lax").lower().strip()
-    if samesite not in {"lax", "strict", "none"}:
-        raise HTTPException(status_code=500, detail="INVALID_COOKIE_SAMESITE")
-    response.set_cookie(
-        key="access_token",
-        value=token,
-        httponly=True,
-        secure=secure_cookie,
-        samesite=samesite,
-        max_age=settings.access_token_expire_minutes * 60,
-        path="/",
+    refresh = create_refresh_token(
+        user_id=str(user.id),
+        tenant_id=token_tenant_id,
     )
+
+    _set_auth_cookies(response, token, refresh)
 
     return LoginResponse(ok=True, access_token=token)
 
@@ -297,19 +346,12 @@ def signup(
         role=created_role,
         tenant_id=token_tenant_id,
     )
-    secure_cookie = settings.environment.lower() == "production"
-    samesite = (settings.cookie_samesite or "lax").lower().strip()
-    if samesite not in {"lax", "strict", "none"}:
-        raise HTTPException(status_code=500, detail="INVALID_COOKIE_SAMESITE")
-    response.set_cookie(
-        key="access_token",
-        value=token,
-        httponly=True,
-        secure=secure_cookie,
-        samesite=samesite,
-        max_age=settings.access_token_expire_minutes * 60,
-        path="/",
+    refresh = create_refresh_token(
+        user_id=user_id,
+        tenant_id=token_tenant_id,
     )
+
+    _set_auth_cookies(response, token, refresh)
 
     logger.info("Signup success ip=%s username=%r", ip, created_username)
     return SignupResponse(ok=True)
@@ -318,7 +360,65 @@ def signup(
 @router.post("/logout")
 def logout(response: Response) -> dict[str, Any]:
     response.delete_cookie(key="access_token", path="/")
+    response.delete_cookie(key="refresh_token", path="/api/auth")
     return {"ok": True}
+
+
+@router.post("/refresh")
+def refresh_access_token(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Exchange a valid refresh token for a new access + refresh token pair."""
+    token = request.cookies.get("refresh_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="NO_REFRESH_TOKEN")
+
+    try:
+        payload = decode_refresh_token(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="INVALID_REFRESH_TOKEN")
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="INVALID_REFRESH_TOKEN")
+
+    import uuid as _uuid
+
+    try:
+        user_uuid = _uuid.UUID(str(user_id))
+    except Exception:
+        raise HTTPException(status_code=401, detail="INVALID_REFRESH_TOKEN")
+
+    user = db.get(User, user_uuid)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="INVALID_REFRESH_TOKEN")
+
+    # Derive tenant_id using the same logic as login
+    mode = (settings.tenant_mode or "shared").strip().lower()
+    token_tenant_id: str | None
+    if mode == "per_tenant":
+        token_tenant_id = str(getattr(user, "tenant_id", None) or "") or None
+    elif mode == "per_user":
+        token_tenant_id = str(getattr(user, "tenant_id", None) or user.id)
+    else:
+        token_tenant_id = None
+
+    new_access = create_access_token(
+        user_id=str(user.id),
+        username=user.username,
+        role=user.role,
+        tenant_id=token_tenant_id,
+    )
+    new_refresh = create_refresh_token(
+        user_id=str(user.id),
+        tenant_id=token_tenant_id,
+    )
+
+    _set_auth_cookies(response, new_access, new_refresh)
+
+    return {"ok": True, "access_token": new_access}
 
 
 @router.get("/me", response_model=MeResponse)

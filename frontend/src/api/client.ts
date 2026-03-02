@@ -19,6 +19,40 @@ function normalizeApiBase(raw: string): string {
 // If VITE_API_BASE is provided (e.g. Render static frontend + separate backend service), use it in ALL modes.
 const API_BASE = RAW_API_BASE ? normalizeApiBase(RAW_API_BASE) : ''
 
+// Track in-flight refresh to avoid thundering herd
+let _refreshPromise: Promise<boolean> | null = null
+
+async function _tryRefresh(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    if (!res.ok) return false
+    const data = (await res.json()) as any
+    if (data?.access_token) {
+      setAccessTokenInternal(data.access_token)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+function setAccessTokenInternal(token: string | null): void {
+  try {
+    if (typeof window === 'undefined') return
+    if (!token) {
+      window.localStorage.removeItem('access_token')
+      return
+    }
+    window.localStorage.setItem('access_token', token)
+  } catch {
+    // ignore
+  }
+}
+
 function getAccessToken(): string | null {
   try {
     if (typeof window === 'undefined') return null
@@ -40,6 +74,31 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       ...(init?.headers ?? {}),
     },
   })
+
+  // Automatic token refresh on 401
+  if (res.status === 401 && !path.includes('/auth/refresh') && !path.includes('/auth/login')) {
+    if (!_refreshPromise) {
+      _refreshPromise = _tryRefresh().finally(() => { _refreshPromise = null })
+    }
+    const refreshed = await _refreshPromise
+    if (refreshed) {
+      // Retry the original request with the new token
+      const newToken = getAccessToken()
+      const retryRes = await fetch(`${API_BASE}${path}`, {
+        ...init,
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(newToken ? { Authorization: `Bearer ${newToken}` } : {}),
+          ...(init?.headers ?? {}),
+        },
+      })
+      if (retryRes.ok) {
+        return (await retryRes.json()) as T
+      }
+      // If retry also fails, fall through to normal error handling with original response
+    }
+  }
 
   if (!res.ok) {
     const contentType = res.headers.get('content-type') ?? ''

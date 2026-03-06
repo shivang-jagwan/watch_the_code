@@ -236,8 +236,33 @@ body[data-modal-open='true'] .app-scroll-region {
   body,
   #root {
     height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
     overflow: visible !important;
     background: #fff !important;
+  }
+
+  /* App shell wrappers use h-screen + overflow-hidden; these clip print to one viewport. */
+  .h-screen,
+  .h-full,
+  .min-h-dvh,
+  [class*='h-[calc(100vh-4rem)]'] {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+
+  .overflow-hidden,
+  .overflow-y-auto,
+  .overflow-x-auto,
+  [class*='overflow-hidden'],
+  [class*='overflow-y-auto'],
+  [class*='overflow-x-auto'] {
+    overflow: visible !important;
+  }
+
+  .flex {
+    display: block !important;
   }
 
   /* Print routes are rendered inside the app layout; remove fixed app chrome. */
@@ -249,6 +274,7 @@ body[data-modal-open='true'] .app-scroll-region {
   .app-scroll-region {
     height: auto !important;
     max-height: none !important;
+    min-height: 0 !important;
     overflow: visible !important;
     margin: 0 !important;
     padding: 0 !important;

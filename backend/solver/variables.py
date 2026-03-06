@@ -14,7 +14,7 @@ from collections import defaultdict
 from typing import Any
 
 from solver.context import SolverContext
-from solver.pre_solve_locks import contiguous_starts
+from solver.pre_solve_locks import contiguous_starts, _ensure_elective_batches
 
 
 def create_variables(ctx: SolverContext) -> None:
@@ -272,8 +272,9 @@ def _create_combined_theory_vars(ctx: SolverContext) -> None:
 
 
 def _create_elective_block_vars(ctx: SolverContext) -> None:
-    """Create shared z BoolVars for elective blocks."""
+    """Create batch-specific z BoolVars for elective blocks."""
     model = ctx.model
+    _ensure_elective_batches(ctx)
     for block_id, sec_ids in ctx.sections_by_block.items():
         if not sec_ids:
             continue
@@ -299,58 +300,62 @@ def _create_elective_block_vars(ctx: SolverContext) -> None:
         if max_per_day < 0:
             max_per_day = 0
 
-        allowed = None
-        for sid in sec_ids:
-            s_allowed = set(ctx.allowed_slots_by_section.get(sid, set()))
-            allowed = s_allowed if allowed is None else (allowed & s_allowed)
-        if not allowed:
-            continue
-
-        for slot_id in sorted(list(allowed)):
-            blocked = False
-            for _subj_id, teacher_id in pairs:
-                if slot_id in ctx.teacher_disallowed_slot_ids.get(teacher_id, set()):
-                    blocked = True
-                    break
-            if blocked:
+        batches = ctx.elective_batches_by_block.get(block_id, [])
+        for batch_idx, batch_sec_ids in enumerate(batches):
+            allowed = None
+            for sec_id in batch_sec_ids:
+                s_allowed = set(ctx.allowed_slots_by_section.get(sec_id, set()))
+                allowed = s_allowed if allowed is None else (allowed & s_allowed)
+            if not allowed:
                 continue
 
-            zv = model.NewBoolVar(f"z_{block_id}_{slot_id}")
-            ctx.z[(block_id, slot_id)] = zv
-            ctx.z_by_block[block_id].append(zv)
+            for slot_id in sorted(list(allowed)):
+                blocked = False
+                for _subj_id, teacher_id in pairs:
+                    if slot_id in ctx.teacher_disallowed_slot_ids.get(teacher_id, set()):
+                        blocked = True
+                        break
+                if blocked:
+                    continue
 
-            for sid in sec_ids:
-                ctx.section_slot_terms[(sid, slot_id)].append(zv)
+                zv = model.NewBoolVar(f"z_{block_id}_{batch_idx}_{slot_id}")
+                ctx.z[(block_id, int(batch_idx), slot_id)] = zv
+                ctx.z_by_block_batch[(block_id, int(batch_idx))].append(zv)
 
-            for _subj_id, _teacher_id in pairs:
-                ctx.room_terms_by_slot[slot_id].append(zv)
+                for sec_id in batch_sec_ids:
+                    ctx.section_slot_terms[(sec_id, slot_id)].append(zv)
 
-            d = ctx.slot_info.get(slot_id, (None, None))[0]
-            if d is not None:
-                ctx.z_by_block_day[(block_id, int(d))].append(zv)
+                for _subj_id, _teacher_id in pairs:
+                    ctx.room_terms_by_slot[slot_id].append(zv)
 
-            for _subj_id, teacher_id in pairs:
-                ctx.teacher_slot_terms[(teacher_id, slot_id)].append(zv)
-                ctx.teacher_all_terms[teacher_id].append(zv)
+                d = ctx.slot_info.get(slot_id, (None, None))[0]
                 if d is not None:
-                    ctx.teacher_day_terms[(teacher_id, int(d))].append(zv)
-                    ctx.teacher_active_days[teacher_id].add(int(d))
+                    ctx.z_by_block_batch_day[(block_id, int(batch_idx), int(d))].append(zv)
 
-        terms = ctx.z_by_block.get(block_id, [])
-        locked = int(ctx.locked_elective_sessions_by_block.get(block_id, 0) or 0)
-        needed = int(sessions_per_week) - locked
-        if needed < 0:
-            model.Add(0 == 1)
-        elif terms:
-            model.Add(sum(terms) == int(needed))
-        else:
-            model.Add(int(needed) == 0)
+                for _subj_id, teacher_id in pairs:
+                    ctx.teacher_slot_terms[(teacher_id, slot_id)].append(zv)
+                    ctx.teacher_all_terms[teacher_id].append(zv)
+                    if d is not None:
+                        ctx.teacher_day_terms[(teacher_id, int(d))].append(zv)
+                        ctx.teacher_active_days[teacher_id].add(int(d))
 
-        for day in range(0, 6):
-            day_terms = ctx.z_by_block_day.get((block_id, day), [])
-            locked_day = int(ctx.locked_elective_sessions_by_block_day.get((block_id, day), 0) or 0)
-            cap = int(max_per_day) - locked_day
-            if cap < 0:
+            terms = ctx.z_by_block_batch.get((block_id, int(batch_idx)), [])
+            locked = int(ctx.locked_elective_sessions_by_block_batch.get((block_id, int(batch_idx)), 0) or 0)
+            needed = int(sessions_per_week) - locked
+            if needed < 0:
                 model.Add(0 == 1)
-            elif day_terms:
-                model.Add(sum(day_terms) <= int(cap))
+            elif terms:
+                model.Add(sum(terms) == int(needed))
+            else:
+                model.Add(int(needed) == 0)
+
+            for day in range(0, 6):
+                day_terms = ctx.z_by_block_batch_day.get((block_id, int(batch_idx), day), [])
+                locked_day = int(
+                    ctx.locked_elective_sessions_by_block_batch_day.get((block_id, int(batch_idx), day), 0) or 0
+                )
+                cap = int(max_per_day) - locked_day
+                if cap < 0:
+                    model.Add(0 == 1)
+                elif day_terms:
+                    model.Add(sum(day_terms) <= int(cap))

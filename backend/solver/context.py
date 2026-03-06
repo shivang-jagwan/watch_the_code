@@ -137,10 +137,14 @@ class SolverContext:
     special_room_by_section_slot: dict[tuple[Any, Any], Any] = field(default_factory=dict)
     special_entries_to_write: list[tuple[Any, Any, Any, Any, Any]] = field(default_factory=list)
 
-    locked_elective_sessions_by_block: dict[Any, int] = field(default_factory=lambda: defaultdict(int))
-    locked_elective_sessions_by_block_day: dict[tuple[Any, int], int] = field(default_factory=lambda: defaultdict(int))
-    locked_elective_block_slots: set[tuple[Any, Any]] = field(default_factory=set)
-    forced_room_by_block_subject_slot: dict[tuple[Any, Any, Any], Any] = field(default_factory=dict)
+    # Elective batching metadata (e.g., 6 sections -> 2 batches of 3)
+    elective_batches_by_block: dict[Any, list[list[Any]]] = field(default_factory=dict)
+    elective_batch_index_by_block_section: dict[tuple[Any, Any], int] = field(default_factory=dict)
+
+    locked_elective_sessions_by_block_batch: dict[tuple[Any, int], int] = field(default_factory=lambda: defaultdict(int))
+    locked_elective_sessions_by_block_batch_day: dict[tuple[Any, int, int], int] = field(default_factory=lambda: defaultdict(int))
+    locked_elective_block_batch_slots: set[tuple[Any, int, Any]] = field(default_factory=set)
+    forced_room_by_block_batch_subject_slot: dict[tuple[Any, int, Any, Any], Any] = field(default_factory=dict)
     locked_block_theory_room_demand_by_slot: dict[Any, int] = field(default_factory=lambda: defaultdict(int))
 
     fixed_room_by_section_slot: dict[tuple[Any, Any], Any] = field(default_factory=dict)
@@ -158,9 +162,9 @@ class SolverContext:
     x_by_sec_subj_day: dict[tuple[Any, Any, int], list] = field(default_factory=lambda: defaultdict(list))
 
     # Elective block vars
-    z: dict[tuple[Any, Any], Any] = field(default_factory=dict)
-    z_by_block: dict[Any, list] = field(default_factory=lambda: defaultdict(list))
-    z_by_block_day: dict[tuple[Any, int], list] = field(default_factory=lambda: defaultdict(list))
+    z: dict[tuple[Any, int, Any], Any] = field(default_factory=dict)
+    z_by_block_batch: dict[tuple[Any, int], list] = field(default_factory=lambda: defaultdict(list))
+    z_by_block_batch_day: dict[tuple[Any, int, int], list] = field(default_factory=lambda: defaultdict(list))
 
     # Lab vars
     lab_start: dict[tuple[Any, Any, int, int], Any] = field(default_factory=dict)

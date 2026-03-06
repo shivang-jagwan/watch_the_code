@@ -427,20 +427,22 @@ def _write_theory_entries(ctx: SolverContext, solver: cp_model.CpSolver) -> None
         )
 
 
-def _emit_block_occurrence(ctx: SolverContext, block_id: Any, slot_id: Any) -> None:
-    """Emit timetable entries for a single elective block occurrence."""
+def _emit_block_batch_occurrence(ctx: SolverContext, block_id: Any, batch_idx: int, slot_id: Any) -> None:
+    """Emit timetable entries for one elective batch occurrence."""
     run = ctx.run
     tenant_id = ctx.tenant_id
     pairs = ctx.block_subject_pairs_by_block.get(block_id, [])
+    batch_sections = ctx.elective_batches_by_block.get(block_id, [])
+    sec_ids = batch_sections[batch_idx] if 0 <= int(batch_idx) < len(batch_sections) else []
     if not pairs:
+        return
+    if not sec_ids:
         return
 
     from solver.room_assigner import _sid, _rid
 
-    for subj_id, _teacher_id in pairs:
-        if (block_id, slot_id, subj_id) in ctx.chosen_room_by_block_slot_subject:
-            continue
-        forced = ctx.forced_room_by_block_subject_slot.get((block_id, subj_id, slot_id))
+    for subj_id, teacher_id in pairs:
+        forced = ctx.forced_room_by_block_batch_subject_slot.get((block_id, int(batch_idx), subj_id, slot_id))
         if forced is not None:
             sid = _sid(slot_id)
             rid = _rid(forced)
@@ -452,44 +454,39 @@ def _emit_block_occurrence(ctx: SolverContext, block_id: Any, slot_id: Any) -> N
                     "Forced elective room is already occupied in this slot.",
                     details={"slot_id": str(slot_id), "room_id": str(forced), "run_id": str(run.id)},
                 )
-            ctx.chosen_room_by_block_slot_subject[(block_id, slot_id, subj_id)] = (forced, ok_room)
-            continue
-
-        room_id, ok_room = pick_lt_room(ctx, slot_id)
-        if room_id is None:
-            continue
-        ctx.chosen_room_by_block_slot_subject[(block_id, slot_id, subj_id)] = (room_id, ok_room)
-
-    for sec_id in ctx.sections_by_block.get(block_id, []):
-        for subj_id, teacher_id in pairs:
-            picked = ctx.chosen_room_by_block_slot_subject.get((block_id, slot_id, subj_id))
-            if picked is None:
+            room_id = forced
+        else:
+            room_id, ok_room = pick_lt_room(ctx, slot_id)
+            if room_id is None:
                 continue
-            room_id, ok_room = picked
-            combined_conflict_id = (
-                elective_group_id(
-                    run_id=run.id, block_id=block_id, subject_id=subj_id, slot_id=slot_id
+
+        combined_conflict_id = elective_group_id(
+            run_id=run.id,
+            block_id=f"{block_id}:{int(batch_idx)}",
+            subject_id=subj_id,
+            slot_id=slot_id,
+        )
+        if not ok_room:
+            combined_conflict_id = room_conflict_group_id(
+                run_id=run.id, room_id=room_id, slot_id=slot_id
+            )
+            ctx.db.add(
+                TimetableConflict(
+                    tenant_id=tenant_id,
+                    run_id=run.id,
+                    severity="WARN",
+                    conflict_type="NO_LT_ROOM_AVAILABLE",
+                    message="No free LT room for elective block slot; assigned a conflicting LT.",
+                    section_id=sec_ids[0],
+                    subject_id=subj_id,
+                    teacher_id=teacher_id,
+                    room_id=room_id,
+                    slot_id=slot_id,
+                    metadata_json={"elective_block_id": str(block_id), "batch_idx": int(batch_idx)},
                 )
-                if ok_room
-                else room_conflict_group_id(run_id=run.id, room_id=room_id, slot_id=slot_id)
             )
 
-            if not ok_room:
-                ctx.db.add(
-                    TimetableConflict(
-                        tenant_id=tenant_id,
-                        run_id=run.id,
-                        severity="WARN",
-                        conflict_type="NO_LT_ROOM_AVAILABLE",
-                        message="No free LT room for elective block slot; assigned a conflicting LT.",
-                        section_id=sec_id,
-                        subject_id=subj_id,
-                        teacher_id=teacher_id,
-                        room_id=room_id,
-                        slot_id=slot_id,
-                        metadata_json={"elective_block_id": str(block_id)},
-                    )
-                )
+        for sec_id in sec_ids:
             _make_entry(
                 ctx,
                 tenant_id=tenant_id,
@@ -506,17 +503,17 @@ def _emit_block_occurrence(ctx: SolverContext, block_id: Any, slot_id: Any) -> N
 
 
 def _write_elective_block_entries(ctx: SolverContext, solver: cp_model.CpSolver) -> None:
-    # Emit locked block occurrences first.
-    for block_id, slot_id in sorted(
-        list(ctx.locked_elective_block_slots), key=lambda x: (str(x[0]), str(x[1]))
+    # Emit locked batch-level block occurrences first.
+    for block_id, batch_idx, slot_id in sorted(
+        list(ctx.locked_elective_block_batch_slots), key=lambda x: (str(x[0]), int(x[1]), str(x[2]))
     ):
-        _emit_block_occurrence(ctx, block_id, slot_id)
+        _emit_block_batch_occurrence(ctx, block_id, int(batch_idx), slot_id)
 
-    # Emit solver-chosen block occurrences.
-    for (block_id, slot_id), zv in ctx.z.items():
+    # Emit solver-chosen batch-level block occurrences.
+    for (block_id, batch_idx, slot_id), zv in ctx.z.items():
         if solver.Value(zv) != 1:
             continue
-        _emit_block_occurrence(ctx, block_id, slot_id)
+        _emit_block_batch_occurrence(ctx, block_id, int(batch_idx), slot_id)
 
 
 def _write_combined_theory_entries(ctx: SolverContext, solver: cp_model.CpSolver) -> None:

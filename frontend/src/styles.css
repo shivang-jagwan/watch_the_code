@@ -227,6 +227,49 @@ body[data-modal-open='true'] .app-scroll-region {
 }
 
 @media print {
+  @page {
+    size: auto;
+    margin: 10mm;
+  }
+
+  html,
+  body,
+  #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  /* Print routes are rendered inside the app layout; remove fixed app chrome. */
+  header,
+  aside {
+    display: none !important;
+  }
+
+  .app-scroll-region {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  main {
+    margin: 0 !important;
+  }
+
+  main > div {
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
   body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;

@@ -46,10 +46,37 @@ def contiguous_starts(sorted_indices: list[int], block: int) -> Iterator[int]:
 
 def apply_pre_solve_locks(ctx: SolverContext) -> None:
     """Process special allotments and fixed entries, marking slots as locked."""
+    _ensure_elective_batches(ctx)
     _apply_special_allotments(ctx)
     _apply_fixed_entries(ctx)
     _prune_teacher_slots(ctx)
     _filter_locked_slot_indices(ctx)
+
+
+def _ensure_elective_batches(ctx: SolverContext) -> None:
+    """Prepare deterministic elective section batches (default chunk size: 3)."""
+    if ctx.elective_batches_by_block:
+        return
+
+    BATCH_SIZE = 3
+    section_code_by_id = {getattr(s, "id", None): str(getattr(s, "code", "")) for s in ctx.sections}
+
+    for block_id, sec_ids in ctx.sections_by_block.items():
+        if not sec_ids:
+            continue
+        ordered = sorted(
+            sec_ids,
+            key=lambda sid: (section_code_by_id.get(sid, ""), str(sid)),
+        )
+        batches: list[list[Any]] = []
+        for i in range(0, len(ordered), BATCH_SIZE):
+            batch = ordered[i : i + BATCH_SIZE]
+            if batch:
+                batches.append(batch)
+        ctx.elective_batches_by_block[block_id] = batches
+        for idx, batch in enumerate(batches):
+            for sid in batch:
+                ctx.elective_batch_index_by_block_section[(block_id, sid)] = idx
 
 
 def _apply_special_allotments(ctx: SolverContext) -> None:
@@ -91,12 +118,17 @@ def _apply_special_allotments(ctx: SolverContext) -> None:
         if block_id is not None:
             pairs = ctx.block_subject_pairs_by_block.get(block_id, [])
             if pairs:
-                if (block_id, sa.slot_id) not in ctx.locked_elective_block_slots:
-                    ctx.locked_elective_block_slots.add((block_id, sa.slot_id))
-                    ctx.locked_elective_sessions_by_block[block_id] += 1
-                    ctx.locked_elective_sessions_by_block_day[(block_id, day)] += 1
+                batch_idx = ctx.elective_batch_index_by_block_section.get((block_id, sa.section_id))
+                if batch_idx is None:
+                    continue
 
-                    for sec_id in ctx.sections_by_block.get(block_id, []):
+                lock_key = (block_id, int(batch_idx), sa.slot_id)
+                if lock_key not in ctx.locked_elective_block_batch_slots:
+                    ctx.locked_elective_block_batch_slots.add(lock_key)
+                    ctx.locked_elective_sessions_by_block_batch[(block_id, int(batch_idx))] += 1
+                    ctx.locked_elective_sessions_by_block_batch_day[(block_id, int(batch_idx), day)] += 1
+
+                    for sec_id in ctx.elective_batches_by_block.get(block_id, [])[int(batch_idx)]:
                         ctx.locked_section_slots.add((sec_id, sa.slot_id))
                         ctx.locked_slot_indices_by_section_day[(sec_id, day)].add(int(slot_idx))
                         ctx.allowed_slots_by_section[sec_id].discard(sa.slot_id)
@@ -109,7 +141,7 @@ def _apply_special_allotments(ctx: SolverContext) -> None:
                         max(0, len(pairs) - 1)
                     )
 
-                ctx.forced_room_by_block_subject_slot[(block_id, sa.subject_id, sa.slot_id)] = sa.room_id
+                ctx.forced_room_by_block_batch_subject_slot[(block_id, int(batch_idx), sa.subject_id, sa.slot_id)] = sa.room_id
                 continue
 
         ctx.locked_theory_sessions_by_sec_subj[(sa.section_id, sa.subject_id)] += 1
@@ -146,12 +178,17 @@ def _apply_fixed_entries(ctx: SolverContext) -> None:
         if block_id is not None and str(subj.subject_type) == "THEORY":
             pairs = ctx.block_subject_pairs_by_block.get(block_id, [])
             if pairs:
-                if (block_id, fe.slot_id) not in ctx.locked_elective_block_slots:
-                    ctx.locked_elective_block_slots.add((block_id, fe.slot_id))
-                    ctx.locked_elective_sessions_by_block[block_id] += 1
-                    ctx.locked_elective_sessions_by_block_day[(block_id, day)] += 1
+                batch_idx = ctx.elective_batch_index_by_block_section.get((block_id, fe.section_id))
+                if batch_idx is None:
+                    continue
 
-                    for sec_id in ctx.sections_by_block.get(block_id, []):
+                lock_key = (block_id, int(batch_idx), fe.slot_id)
+                if lock_key not in ctx.locked_elective_block_batch_slots:
+                    ctx.locked_elective_block_batch_slots.add(lock_key)
+                    ctx.locked_elective_sessions_by_block_batch[(block_id, int(batch_idx))] += 1
+                    ctx.locked_elective_sessions_by_block_batch_day[(block_id, int(batch_idx), day)] += 1
+
+                    for sec_id in ctx.elective_batches_by_block.get(block_id, [])[int(batch_idx)]:
                         ctx.locked_section_slots.add((sec_id, fe.slot_id))
                         ctx.locked_slot_indices_by_section_day[(sec_id, day)].add(int(slot_idx))
                         ctx.allowed_slots_by_section[sec_id].discard(fe.slot_id)
@@ -162,7 +199,7 @@ def _apply_fixed_entries(ctx: SolverContext) -> None:
 
                     ctx.locked_block_theory_room_demand_by_slot[fe.slot_id] += int(len(pairs))
 
-                ctx.forced_room_by_block_subject_slot[(block_id, fe.subject_id, fe.slot_id)] = fe.room_id
+                ctx.forced_room_by_block_batch_subject_slot[(block_id, int(batch_idx), fe.subject_id, fe.slot_id)] = fe.room_id
                 ctx.locked_fixed_entry_ids.add(str(fe.id))
                 continue
 

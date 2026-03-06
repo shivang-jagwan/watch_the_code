@@ -15,11 +15,20 @@ from models.user import User
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def _extract_token(request: Request, creds: HTTPAuthorizationCredentials | None) -> str | None:
-    if creds is not None and creds.credentials:
-        return creds.credentials
-    cookie_token = request.cookies.get("access_token")
-    return cookie_token or None
+def _extract_tokens(request: Request, creds: HTTPAuthorizationCredentials | None) -> tuple[str | None, str | None]:
+    bearer_token = (creds.credentials if creds is not None and creds.credentials else None)
+    cookie_token = request.cookies.get("access_token") or None
+    return bearer_token, cookie_token
+
+
+def _decode_payload(token: str | None) -> dict | None:
+    if not token:
+        return None
+    try:
+        payload = decode_token(token)
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def get_current_user(
@@ -31,12 +40,15 @@ def get_current_user(
     if isinstance(cached, User):
         return cached
 
-    token = _extract_token(request, creds)
-    if not token:
+    bearer_token, cookie_token = _extract_tokens(request, creds)
+    if not bearer_token and not cookie_token:
         raise HTTPException(status_code=401, detail="NOT_AUTHENTICATED")
-    try:
-        payload = decode_token(token)
-    except Exception:
+
+    # Prefer bearer token, but fall back to cookie token if bearer is stale/invalid.
+    payload = _decode_payload(bearer_token)
+    if payload is None:
+        payload = _decode_payload(cookie_token)
+    if payload is None:
         raise HTTPException(status_code=401, detail="INVALID_TOKEN")
 
     user_id = payload.get("sub")

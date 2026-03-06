@@ -197,7 +197,14 @@ export function Subjects() {
       showToast('Subject deleted')
       await refresh()
     } catch (e: any) {
-      showToast(`Delete failed: ${String(e?.message ?? e)}`, 3500)
+      const msg = String(e?.message ?? e)
+      if (msg.includes('SUBJECT_NOT_FOUND')) {
+        // Subject may already be deleted in another tab/session; sync UI state.
+        showToast('Subject already removed')
+        await refresh()
+      } else {
+        showToast(`Delete failed: ${msg}`, 3500)
+      }
     } finally {
       setLoading(false)
     }

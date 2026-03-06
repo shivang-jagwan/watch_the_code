@@ -254,6 +254,7 @@ export function TimetablePrintAllFaculty() {
   const [loading, setLoading] = React.useState(false)
   const [progress, setProgress] = React.useState<{ done: number; total: number }>({ done: 0, total: 0 })
   const [error, setError] = React.useState<string>('')
+  const [fetchWarnings, setFetchWarnings] = React.useState<string[]>([])
 
   const [slots, setSlots] = React.useState<TimeSlot[]>([])
   const [rooms, setRooms] = React.useState<Room[]>([])
@@ -280,6 +281,7 @@ export function TimetablePrintAllFaculty() {
     ;(async () => {
       setLoading(true)
       setError('')
+      setFetchWarnings([])
       setProgress({ done: 0, total: 0 })
       try {
         const [s, r, t] = await Promise.all([listTimeSlots(), listRooms(), listTeachers()])
@@ -295,12 +297,26 @@ export function TimetablePrintAllFaculty() {
           active,
           6,
           async (teacher) => {
-            const data = await getFacultyTimetable(teacher.id, runId)
-            return {
-              teacherId: teacher.id,
-              teacherCode: teacher.code,
-              teacherName: teacher.full_name,
-              entries: data,
+            try {
+              const data = await getFacultyTimetable(teacher.id, runId)
+              return {
+                teacherId: teacher.id,
+                teacherCode: teacher.code,
+                teacherName: teacher.full_name,
+                entries: data,
+              }
+            } catch (ex: any) {
+              const msg = String(ex?.message ?? ex)
+              if (!cancelled) {
+                setFetchWarnings((prev) => [...prev, `${teacher.code}: ${msg}`])
+              }
+              // Keep this teacher printable even if its fetch fails.
+              return {
+                teacherId: teacher.id,
+                teacherCode: teacher.code,
+                teacherName: teacher.full_name,
+                entries: [],
+              }
             }
           },
           (done, total) => {
@@ -377,6 +393,11 @@ export function TimetablePrintAllFaculty() {
           </div>
         ) : error ? (
           <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>
+        ) : fetchWarnings.length > 0 ? (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="font-semibold">Some faculty timetables could not be loaded.</div>
+            <div className="mt-1">Loaded {grids.length - fetchWarnings.length}/{grids.length} faculty for printing.</div>
+          </div>
         ) : teachers.length === 0 && !loading ? (
           <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">No teachers found.</div>
         ) : (

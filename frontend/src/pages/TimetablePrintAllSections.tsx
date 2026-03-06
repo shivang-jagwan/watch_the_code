@@ -227,6 +227,7 @@ export function TimetablePrintAllSections() {
   const [loading, setLoading] = React.useState(false)
   const [progress, setProgress] = React.useState<{ done: number; total: number }>({ done: 0, total: 0 })
   const [error, setError] = React.useState<string>('')
+  const [fetchWarnings, setFetchWarnings] = React.useState<string[]>([])
 
   const [slots, setSlots] = React.useState<TimeSlot[]>([])
   const [sections, setSections] = React.useState<Array<{ id: string; code: string }>>([])
@@ -241,6 +242,7 @@ export function TimetablePrintAllSections() {
     ;(async () => {
       setLoading(true)
       setError('')
+      setFetchWarnings([])
       setProgress({ done: 0, total: 0 })
       try {
         const [s, runEntries] = await Promise.all([listTimeSlots(), listRunEntries(runId)])
@@ -262,8 +264,17 @@ export function TimetablePrintAllSections() {
           list,
           6,
           async (sec) => {
-            const data = await getSectionTimetable(sec.id, runId)
-            return { sectionId: sec.id, sectionCode: sec.code, entries: data }
+            try {
+              const data = await getSectionTimetable(sec.id, runId)
+              return { sectionId: sec.id, sectionCode: sec.code, entries: data }
+            } catch (ex: any) {
+              const msg = String(ex?.message ?? ex)
+              if (!cancelled) {
+                setFetchWarnings((prev) => [...prev, `${sec.code}: ${msg}`])
+              }
+              // Keep this section printable even if its fetch fails.
+              return { sectionId: sec.id, sectionCode: sec.code, entries: [] }
+            }
           },
           (done, total) => {
             if (!cancelled) setProgress({ done, total })
@@ -341,6 +352,11 @@ export function TimetablePrintAllSections() {
           </div>
         ) : error ? (
           <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>
+        ) : fetchWarnings.length > 0 ? (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className="font-semibold">Some sections could not be loaded.</div>
+            <div className="mt-1">Loaded {grids.length - fetchWarnings.length}/{grids.length} sections for printing.</div>
+          </div>
         ) : sections.length === 0 && !loading ? (
           <div className="rounded-xl border bg-slate-50 p-4 text-sm text-slate-700">
             No sections found in this run.

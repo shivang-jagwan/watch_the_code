@@ -1557,8 +1557,6 @@ def solve_timetable(
 
         if payload.relax_teacher_load_limits:
             # Persist an explicit warning so runs are auditable.
-            from models.timetable_conflict import TimetableConflict
-
             db.add(
                 TimetableConflict(
                     tenant_id=tenant_id,

@@ -21,6 +21,16 @@ const API_BASE = RAW_API_BASE ? normalizeApiBase(RAW_API_BASE) : ''
 
 // Track in-flight refresh to avoid thundering herd
 let _refreshPromise: Promise<boolean> | null = null
+let _redirectingToLogin = false
+
+function handleUnauthorized(): void {
+  setAccessTokenInternal(null)
+  if (typeof window === 'undefined') return
+  if (_redirectingToLogin) return
+  if (window.location.pathname === '/login') return
+  _redirectingToLogin = true
+  window.location.assign('/login')
+}
 
 async function _tryRefresh(): Promise<boolean> {
   try {
@@ -63,6 +73,12 @@ function getAccessToken(): string | null {
 }
 
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  // If we've already determined auth is invalid and started redirecting,
+  // avoid firing more protected API requests that will just 401 again.
+  if (_redirectingToLogin && !path.includes('/auth/login')) {
+    throw new Error('Session expired. Redirecting to login.')
+  }
+
   const token = getAccessToken()
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -96,11 +112,24 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       if (retryRes.ok) {
         return (await retryRes.json()) as T
       }
-      // If retry also fails, fall through to normal error handling with original response
+      // If retry also fails with 401, force re-auth.
+      if (retryRes.status === 401) {
+        handleUnauthorized()
+        throw new Error('Session expired. Please log in again.')
+      }
+      // Fall through to normal error handling with original response.
+    } else {
+      handleUnauthorized()
+      throw new Error('Session expired. Please log in again.')
     }
   }
 
   if (!res.ok) {
+    if (res.status === 401 && !path.includes('/auth/login')) {
+      handleUnauthorized()
+      throw new Error('Session expired. Please log in again.')
+    }
+
     const contentType = res.headers.get('content-type') ?? ''
     const raw = await res.text()
 

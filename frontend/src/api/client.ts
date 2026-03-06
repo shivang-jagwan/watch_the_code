@@ -81,7 +81,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   const token = getAccessToken()
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  let res = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: 'include',
     headers: {
@@ -112,12 +112,14 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
       if (retryRes.ok) {
         return (await retryRes.json()) as T
       }
+      // Continue error handling with retry response (not the original 401).
+      res = retryRes
       // If retry also fails with 401, force re-auth.
       if (retryRes.status === 401) {
         handleUnauthorized()
         throw new Error('Session expired. Please log in again.')
       }
-      // Fall through to normal error handling with original response.
+      // Fall through to normal error handling with retry response.
     } else {
       handleUnauthorized()
       throw new Error('Session expired. Please log in again.')

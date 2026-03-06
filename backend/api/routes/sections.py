@@ -71,6 +71,31 @@ def _get_academic_year(db: Session, year_number: int, *, tenant_id: uuid.UUID | 
     return ay
 
 
+def _get_or_create_academic_year(db: Session, year_number: int, *, tenant_id: uuid.UUID | None) -> AcademicYear:
+    q = select(AcademicYear).where(AcademicYear.year_number == int(year_number))
+    q = where_tenant(q, AcademicYear, tenant_id)
+    ay = db.execute(q).scalar_one_or_none()
+    if ay is not None:
+        return ay
+
+    ay = AcademicYear(
+        year_number=int(year_number),
+        is_active=True,
+        **({"tenant_id": tenant_id} if tenant_id is not None else {}),
+    )
+    db.add(ay)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        q2 = select(AcademicYear).where(AcademicYear.year_number == int(year_number))
+        q2 = where_tenant(q2, AcademicYear, tenant_id)
+        ay = db.execute(q2).scalar_one_or_none()
+        if ay is None:
+            raise
+    return ay
+
+
 def _active_days_from_time_slots(db: Session, *, tenant_id: uuid.UUID | None) -> list[int]:
     days = (
         db.execute(
@@ -103,11 +128,21 @@ def list_sections(
     q = where_tenant(select(Section), Section, tenant_id).order_by(Section.code.asc())
 
     if program_code is not None:
-        program = _get_program(db, program_code, tenant_id=tenant_id)
+        q_program = where_tenant(select(Program).where(Program.code == program_code), Program, tenant_id)
+        program = db.execute(q_program).scalar_one_or_none()
+        if program is None:
+            return []
         q = q.where(Section.program_id == program.id)
 
     if academic_year_number is not None:
-        ay = _get_academic_year(db, int(academic_year_number), tenant_id=tenant_id)
+        q_ay = where_tenant(
+            select(AcademicYear).where(AcademicYear.year_number == int(academic_year_number)),
+            AcademicYear,
+            tenant_id,
+        )
+        ay = db.execute(q_ay).scalar_one_or_none()
+        if ay is None:
+            return []
         q = q.where(Section.academic_year_id == ay.id)
 
     return db.execute(q).scalars().all()
@@ -121,7 +156,7 @@ def create_section(
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ) -> SectionOut:
     program = _get_program(db, payload.program_code, tenant_id=tenant_id)
-    ay = _get_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id)
+    ay = _get_or_create_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id)
 
     track = _validate_track(payload.track)
     _ensure_unique_section_code(db, program_id=program.id, code=payload.code, exclude_section_id=None)

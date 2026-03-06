@@ -79,6 +79,31 @@ def _get_academic_year(db: Session, year_number: int, *, tenant_id: uuid.UUID | 
     return ay
 
 
+def _get_or_create_academic_year(db: Session, year_number: int, *, tenant_id: uuid.UUID | None) -> AcademicYear:
+    q = select(AcademicYear).where(AcademicYear.year_number == int(year_number))
+    q = where_tenant(q, AcademicYear, tenant_id)
+    ay = db.execute(q).scalar_one_or_none()
+    if ay is not None:
+        return ay
+
+    ay = AcademicYear(
+        year_number=int(year_number),
+        is_active=True,
+        **({"tenant_id": tenant_id} if tenant_id is not None else {}),
+    )
+    db.add(ay)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        q2 = select(AcademicYear).where(AcademicYear.year_number == int(year_number))
+        q2 = where_tenant(q2, AcademicYear, tenant_id)
+        ay = db.execute(q2).scalar_one_or_none()
+        if ay is None:
+            raise
+    return ay
+
+
 @router.get("/", response_model=list[SubjectOut])
 def list_subjects(
     program_code: str | None = Query(default=None),
@@ -121,7 +146,7 @@ def create_subject(
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ) -> SubjectOut:
     program = _get_program(db, payload.program_code, tenant_id=tenant_id)
-    ay = _get_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id)
+    ay = _get_or_create_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id)
 
     _validate_subject_constraints(
         subject_type=payload.subject_type,

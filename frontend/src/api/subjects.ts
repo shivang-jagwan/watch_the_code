@@ -43,11 +43,11 @@ export async function listSubjects(params: {
     program_code: params.program_code,
     academic_year_number: String(params.academic_year_number),
   })
-  return apiFetch<Subject[]>(`/api/subjects/?${qs.toString()}`)
+  return apiFetch<Subject[]>(`/api/subjects?${qs.toString()}`)
 }
 
 export async function createSubject(payload: SubjectCreate): Promise<Subject> {
-  return apiFetch<Subject>('/api/subjects/', {
+  return apiFetch<Subject>('/api/subjects', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

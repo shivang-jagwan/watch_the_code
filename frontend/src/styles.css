@@ -296,6 +296,59 @@ body[data-modal-open='true'] .app-scroll-region {
     display: none !important;
   }
 
+  /* Reference-style compact print rendering */
+  .min-h-dvh {
+    font-size: 10px !important;
+    line-height: 1.2 !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    border-spacing: 0 !important;
+    table-layout: fixed !important;
+  }
+
+  th,
+  td {
+    border: 1px solid #1f2937 !important;
+    padding: 3px 4px !important;
+    vertical-align: top !important;
+  }
+
+  th {
+    background: #f3f4f6 !important;
+    color: #111827 !important;
+    font-weight: 700 !important;
+    text-align: center !important;
+  }
+
+  td .rounded-xl,
+  td .rounded-full,
+  td .inline-flex,
+  td .bg-emerald-50,
+  td .bg-indigo-50,
+  td .bg-slate-50 {
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: #111827 !important;
+  }
+
+  .space-y-10,
+  .space-y-2 {
+    --tw-space-y-reverse: 0 !important;
+    margin-top: 0 !important;
+    margin-bottom: 0 !important;
+  }
+
+  .space-y-10 > :not([hidden]) ~ :not([hidden]),
+  .space-y-2 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 2px !important;
+  }
+
   body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;

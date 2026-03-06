@@ -1302,8 +1302,19 @@ def list_elective_blocks(
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ):
-    program = _get_program(db, program_code, tenant_id=tenant_id)
-    year = _get_academic_year(db, int(academic_year_number), tenant_id=tenant_id)
+    q_program = where_tenant(select(Program).where(Program.code == program_code), Program, tenant_id)
+    program = db.execute(q_program).scalar_one_or_none()
+    if program is None:
+        return []
+
+    q_year = where_tenant(
+        select(AcademicYear).where(AcademicYear.year_number == int(academic_year_number)),
+        AcademicYear,
+        tenant_id,
+    )
+    year = db.execute(q_year).scalar_one_or_none()
+    if year is None:
+        return []
 
     q = (
         select(ElectiveBlock)
@@ -1326,7 +1337,7 @@ def create_elective_block(
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ):
     program = _get_program(db, payload.program_code, tenant_id=tenant_id)
-    year = _get_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id)
+    year = _get_or_create_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id, activate=True)
 
     block = ElectiveBlock(
         tenant_id=tenant_id,

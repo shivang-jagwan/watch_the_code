@@ -59,11 +59,11 @@ export async function listSections(params: {
     program_code: params.program_code,
     academic_year_number: String(params.academic_year_number),
   })
-  return apiFetch<Section[]>(`/api/sections/?${qs.toString()}`)
+  return apiFetch<Section[]>(`/api/sections?${qs.toString()}`)
 }
 
 export async function createSection(payload: SectionCreate): Promise<Section> {
-  return apiFetch<Section>('/api/sections/', {
+  return apiFetch<Section>('/api/sections', {
     method: 'POST',
     body: JSON.stringify(payload),
   })

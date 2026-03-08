@@ -28,3 +28,7 @@ export async function deleteProgram(programId: string): Promise<{ ok: true }> {
     method: 'DELETE',
   })
 }
+
+export async function getLatestProgram(): Promise<{ program_code: string }> {
+  return apiFetch<{ program_code: string }>('/api/programs/latest')
+}

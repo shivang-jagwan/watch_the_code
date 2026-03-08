@@ -107,6 +107,28 @@ export function Header({
             className="text-white hover:bg-white/10 focus:ring-white/40"
           />
 
+          {/* Mobile compact program select – hidden on desktop */}
+          <div className="flex items-center gap-1.5 md:hidden">
+            <span className="text-xs font-medium text-white/80 hidden sm:inline">Program:</span>
+            <select
+              className="rounded-md border border-white/30 bg-white/20 px-2 py-1 text-xs text-white focus:outline-none focus:ring-2 focus:ring-white/40 max-w-[140px]"
+              value={programSelectValue === '__custom__' ? programCode : programSelectValue}
+              onChange={(e) => {
+                if (e.target.value) {
+                  setUseCustomProgram(false)
+                  onChangeProgramCode(e.target.value)
+                }
+              }}
+            >
+              {!programCode && <option value="">Select…</option>}
+              {programs.map((p) => (
+                <option key={p.id} value={p.code}>
+                  {p.code}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="hidden items-center gap-3 md:flex">
             {logoFailed ? (
               <div className="grid h-10 w-10 place-items-center rounded-full bg-white/15 text-xs font-bold text-white shadow-sm ring-1 ring-white/20">

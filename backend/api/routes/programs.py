@@ -11,10 +11,37 @@ from api.deps import get_tenant_id, require_admin
 from api.tenant import get_by_id, where_tenant
 from core.db import get_db
 from models.program import Program
+from models.timetable_run import TimetableRun
 from schemas.program import ProgramCreate, ProgramOut, ProgramUpdate
 
 
 router = APIRouter()
+
+
+@router.get("/latest")
+def get_latest_program(
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> dict:
+    """Return the program_code of the most recently run timetable (any status)."""
+    q = (
+        where_tenant(select(TimetableRun), TimetableRun, tenant_id)
+        .where(TimetableRun.parameters["program_code"].astext != None)  # noqa: E711
+        .order_by(TimetableRun.created_at.desc())
+        .limit(1)
+    )
+    run = db.execute(q).scalars().first()
+    if run is not None:
+        code = (run.parameters or {}).get("program_code")
+        if code:
+            return {"program_code": code}
+
+    # Fallback: first program alphabetically
+    q2 = where_tenant(select(Program), Program, tenant_id).order_by(Program.code.asc()).limit(1)
+    prog = db.execute(q2).scalars().first()
+    if prog is None:
+        raise HTTPException(status_code=404, detail="NO_PROGRAMS")
+    return {"program_code": prog.code}
 
 
 @router.get("/", response_model=list[ProgramOut])

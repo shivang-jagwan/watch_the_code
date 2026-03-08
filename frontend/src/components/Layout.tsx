@@ -3,6 +3,9 @@ import { Outlet, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { Header } from './layout/Header'
 import { Sidebar } from './Sidebar'
+import { getLatestProgram } from '../api/programs'
+
+const STORAGE_KEY = 'selected_program_code'
 
 type LayoutContextValue = {
   programCode: string
@@ -24,8 +27,26 @@ export function Layout() {
   const { logout } = useAuth()
   const [collapsed, setCollapsed] = React.useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false)
-  const [programCode, setProgramCode] = React.useState('')
+  const [programCode, setProgramCodeState] = React.useState<string>(() => {
+    try { return localStorage.getItem(STORAGE_KEY) ?? '' } catch { return '' }
+  })
   const [academicYearNumber, setAcademicYearNumber] = React.useState(1)
+
+  const setProgramCode = React.useCallback((v: string) => {
+    setProgramCodeState(v)
+    try { localStorage.setItem(STORAGE_KEY, v) } catch {}
+  }, [])
+
+  // On mount: if nothing stored, fetch the latest program
+  React.useEffect(() => {
+    try {
+      if (localStorage.getItem(STORAGE_KEY)) return
+    } catch {}
+    getLatestProgram()
+      .then(({ program_code }) => setProgramCode(program_code))
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function onLogout() {
     await logout()

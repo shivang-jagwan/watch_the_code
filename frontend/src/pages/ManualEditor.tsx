@@ -77,6 +77,11 @@ function detectConflicts(entries: BoardEntry[]): ConflictItem[] {
     }
     for (const tes of byTeacher.values()) {
       if (tes.length > 1) {
+        // Skip: all entries share the same non-null combined_class_id (combined lecture)
+        const allSameCombined =
+          tes.every((e) => e.combined_class_id != null) &&
+          tes.every((e) => e.combined_class_id === tes[0].combined_class_id)
+        if (allSameCombined) continue
         const sections = tes.map((e) => e.section_code).join(', ')
         conflicts.push({
           type: 'TEACHER',
@@ -318,6 +323,8 @@ export function ManualEditor() {
   const [editingEntry, setEditingEntry] = React.useState<BoardEntry | null>(null)
   const [activeEntry, setActiveEntry] = React.useState<BoardEntry | null>(null)
   const [runs, setRuns] = React.useState<RunSummary[]>([])
+  const [editScope, setEditScope] = React.useState<'ALL' | 'DAY'>('ALL')
+  const [selectedDay, setSelectedDay] = React.useState<number>(0)
 
   function showToast(msg: string, ms = 3500) {
     setToast(msg)
@@ -383,6 +390,16 @@ export function ManualEditor() {
   const days = React.useMemo(
     () => [...new Set(slots.map((s) => s.day_of_week))].sort((a, b) => a - b),
     [slots],
+  )
+
+  // When slots load, ensure selectedDay is valid
+  React.useEffect(() => {
+    if (days.length > 0 && !days.includes(selectedDay)) setSelectedDay(days[0])
+  }, [days, selectedDay])
+
+  const visibleDays = React.useMemo(
+    () => (editScope === 'ALL' ? days : days.filter((d) => d === selectedDay)),
+    [editScope, selectedDay, days],
   )
 
   const slotsByDay = React.useMemo(() => {
@@ -562,67 +579,108 @@ export function ManualEditor() {
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="shrink-0 flex flex-wrap items-center gap-2 border-b bg-white px-4 py-2.5 shadow-sm">
-        <span className="font-semibold text-slate-900">Manual Timetable Editor</span>
+      <div className="shrink-0 border-b bg-white px-3 py-2 shadow-sm">
+        {/* Row 1: title + status badges + actions */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-slate-900">Manual Editor</span>
 
-        {programCode && (
-          <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700">
-            {programCode}
-          </span>
-        )}
+          {programCode && (
+            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+              {programCode}
+            </span>
+          )}
 
-        {sourceRunId && (
-          <span className="font-mono text-xs text-slate-400">
-            {sourceRunId.split('-')[0]} · {runStatus}
-          </span>
-        )}
+          {sourceRunId && (
+            <span className="font-mono text-xs text-slate-400">
+              {sourceRunId.split('-')[0]} · {runStatus}
+            </span>
+          )}
 
-        {dirtyCount > 0 && (
-          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
-            {dirtyCount} edited
-          </span>
-        )}
+          {dirtyCount > 0 && (
+            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+              {dirtyCount} edited
+            </span>
+          )}
 
-        {holdEntries.length > 0 && (
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
-            {holdEntries.length} in hold
-          </span>
-        )}
+          {holdEntries.length > 0 && (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+              {holdEntries.length} held
+            </span>
+          )}
 
-        <div className="flex-1" />
+          <div className="flex-1" />
 
-        {runs.length > 1 && (
-          <select
-            className="rounded-lg border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            defaultValue={sourceRunId}
-            onChange={(e) => handleRunChange(e.target.value)}
+          {runs.length > 1 && (
+            <select
+              className="rounded-lg border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              defaultValue={sourceRunId}
+              onChange={(e) => handleRunChange(e.target.value)}
+            >
+              {runs.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.id.split('-')[0]} — {r.status}
+                  {(r.parameters?.scope as string) === 'MANUAL_EDIT' ? ' (manual)' : ''}
+                </option>
+              ))}
+            </select>
+          )}
+
+          <button
+            className="btn-secondary text-xs px-2 py-1"
+            onClick={handleReset}
+            disabled={loading || saving}
           >
-            {runs.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.id.split('-')[0]} — {r.status}
-                {(r.parameters?.scope as string) === 'MANUAL_EDIT' ? ' (manual)' : ''}
-              </option>
-            ))}
-          </select>
-        )}
+            Reset
+          </button>
+          <button
+            className="btn-primary text-xs px-2 py-1"
+            onClick={handleSave}
+            disabled={loading || saving || boardEntries.length === 0}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <Link className="btn-secondary text-xs px-2 py-1" to="/dashboard">
+            ← Dashboard
+          </Link>
+        </div>
 
-        <button
-          className="btn-secondary text-sm"
-          onClick={handleReset}
-          disabled={loading || saving}
-        >
-          Reset
-        </button>
-        <button
-          className="btn-primary text-sm"
-          onClick={handleSave}
-          disabled={loading || saving || boardEntries.length === 0}
-        >
-          {saving ? 'Saving…' : 'Save as new run'}
-        </button>
-        <Link className="btn-secondary text-sm" to="/dashboard">
-          ← Dashboard
-        </Link>
+        {/* Row 2: edit scope controls */}
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-600">
+          <span className="font-medium">View:</span>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input
+              type="radio"
+              name="editScope"
+              className="accent-indigo-600"
+              checked={editScope === 'ALL'}
+              onChange={() => setEditScope('ALL')}
+            />
+            All Days
+          </label>
+          <label className="flex cursor-pointer items-center gap-1">
+            <input
+              type="radio"
+              name="editScope"
+              className="accent-indigo-600"
+              checked={editScope === 'DAY'}
+              onChange={() => setEditScope('DAY')}
+            />
+            Single Day
+          </label>
+          {editScope === 'DAY' && (
+            <select
+              value={selectedDay}
+              onChange={(e) => setSelectedDay(Number(e.target.value))}
+              className="rounded border border-slate-300 px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            >
+              {days.map((d) => (
+                <option key={d} value={d}>
+                  {DAY_LABELS[d] ?? `Day ${d}`}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
 
       {/* ── Toast ──────────────────────────────────────────────────────────── */}
@@ -678,7 +736,7 @@ export function ManualEditor() {
                     >
                       Section
                     </th>
-                    {days.map((day) => (
+                    {visibleDays.map((day) => (
                       <th
                         key={day}
                         className="border border-slate-300 bg-slate-100 px-2 py-1.5 text-center font-semibold text-slate-700"
@@ -690,7 +748,7 @@ export function ManualEditor() {
                   </tr>
                   {/* Slot times row */}
                   <tr>
-                    {days.map((day) =>
+                    {visibleDays.map((day) =>
                       (slotsByDay.get(day) ?? []).map((slot) => (
                         <th
                           key={slot.id}
@@ -715,7 +773,7 @@ export function ManualEditor() {
                           {sec.name}
                         </div>
                       </td>
-                      {days.map((day) =>
+                      {visibleDays.map((day) =>
                         (slotsByDay.get(day) ?? []).map((slot) => {
                           const cellEntries =
                             entryMap.get(`${sec.id}__${day}__${slot.slot_index}`) ?? []

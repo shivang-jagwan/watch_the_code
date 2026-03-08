@@ -28,12 +28,17 @@ from models.timetable_run import TimetableRun
 # Re-export for backward compatibility
 from solver.context import SolveResult, SolverContext, SolverInvariantError  # noqa: F401
 
+import logging
+import os
+
 from solver.constraints import add_constraints
-from solver.data_loader import load_all
+from solver.data_loader import load_all, build_pruned_slots
 from solver.objective import add_objective
 from solver.pre_solve_locks import apply_pre_solve_locks
 from solver.result_writer import write_results
 from solver.variables import create_variables
+
+logger = logging.getLogger(__name__)
 
 
 def solve_program_year(
@@ -46,6 +51,7 @@ def solve_program_year(
     max_time_seconds: float,
     enforce_teacher_load_limits: bool = True,
     require_optimal: bool = False,
+    allow_extended_solve: bool = False,
 ) -> SolveResult:
     return _solve_program(
         db,
@@ -56,6 +62,7 @@ def solve_program_year(
         max_time_seconds=max_time_seconds,
         enforce_teacher_load_limits=enforce_teacher_load_limits,
         require_optimal=require_optimal,
+        allow_extended_solve=allow_extended_solve,
     )
 
 
@@ -68,6 +75,7 @@ def solve_program_global(
     max_time_seconds: float,
     enforce_teacher_load_limits: bool = True,
     require_optimal: bool = False,
+    allow_extended_solve: bool = False,
 ) -> SolveResult:
     """Program-wide solve across all academic years."""
     return _solve_program(
@@ -79,6 +87,7 @@ def solve_program_global(
         max_time_seconds=max_time_seconds,
         enforce_teacher_load_limits=enforce_teacher_load_limits,
         require_optimal=require_optimal,
+        allow_extended_solve=allow_extended_solve,
     )
 
 
@@ -92,6 +101,7 @@ def _solve_program(
     max_time_seconds: float,
     enforce_teacher_load_limits: bool,
     require_optimal: bool,
+    allow_extended_solve: bool = False,
 ) -> SolveResult:
     tenant_id = getattr(run, "tenant_id", None)
 
@@ -114,6 +124,11 @@ def _solve_program(
     # 3. Pre-solve locks (special allotments, fixed entries, teacher pruning)
     apply_pre_solve_locks(ctx)
 
+    # 3b. OPTIMIZATION: build per-(section,subject) pruned slot lists.
+    #     Must run AFTER apply_pre_solve_locks so teacher_disallowed_slot_ids
+    #     is fully populated.  Variables step reads these lists directly.
+    build_pruned_slots(ctx)
+
     # 4. Create CP-SAT variables
     create_variables(ctx)
 
@@ -128,16 +143,80 @@ def _solve_program(
     _add_search_hints(ctx)
 
     # 8. Solve
+    num_vars = len(ctx.model.Proto().variables)
+    num_constraints = len(ctx.model.Proto().constraints)
+    slots_total = sum(len(v) for v in ctx.valid_slots_by_section_subject.values())
+    ctx.pre_solve_metrics = {
+        "num_vars": num_vars,
+        "num_constraints": num_constraints,
+        "pruned_slots_total": slots_total,
+        "sections": len(ctx.sections),
+        "teachers": len(ctx.teachers),
+    }
+    logger.info(
+        "[solver] pre-solve: vars=%d constraints=%d pruned_slot_lists=%d sections=%d teachers=%d",
+        num_vars, num_constraints, slots_total,
+        ctx.pre_solve_metrics["sections"], ctx.pre_solve_metrics["teachers"],
+    )
+    # Structured stats block for operators.
+    logger.info(
+        "[solver] === Solver Stats ===\n"
+        "          Sections:    %d\n"
+        "          Subjects:    %d\n"
+        "          Slots:       %d\n"
+        "          Variables:   %s\n"
+        "          Constraints: %s\n"
+        "          ===================",
+        len(ctx.sections),
+        len(ctx.subjects),
+        len(ctx.slots),
+        f"{num_vars:,}",
+        f"{num_constraints:,}",
+    )
+
+    # Enforce a hard 5-minute (300 s) cap on the initial solve budget.
+    # Callers may request less time; they cannot request more than 300 s here.
+    initial_budget = min(float(max_time_seconds), 300.0)
+
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = float(max_time_seconds)
-    solver.parameters.num_search_workers = 8
-    # Improve solution quality: allow solver to keep searching for better solutions
-    solver.parameters.linearization_level = 1
-    solver.parameters.log_search_progress = False
+    solver.parameters.max_time_in_seconds = initial_budget
+    solver.parameters.num_search_workers = os.cpu_count() or 8
+    solver.parameters.linearization_level = 2
+    solver.parameters.cp_model_presolve = True
+    solver.parameters.symmetry_level = 2
+    solver.parameters.log_search_progress = True
     if seed is not None:
         solver.parameters.random_seed = int(seed)
 
+    logger.info(
+        "[solver] starting solve: budget=%.0fs workers=%d extended_solve=%s",
+        initial_budget, solver.parameters.num_search_workers, allow_extended_solve,
+    )
     status = solver.Solve(ctx.model)
+
+    # Extended solve: if FEASIBLE (not proven optimal) and the caller opted in,
+    # re-run with double the original budget (capped at 600 s) to try to close
+    # the optimality gap.  The model is reused unchanged; CP-SAT resumes from
+    # the incumbent solution it already has.
+    if allow_extended_solve and status == cp_model.FEASIBLE:
+        extended_budget = min(float(max_time_seconds) * 2, 600.0)
+        logger.info(
+            "[solver] status=FEASIBLE, launching extended solve: budget=%.0fs",
+            extended_budget,
+        )
+        solver.parameters.max_time_in_seconds = extended_budget
+        status = solver.Solve(ctx.model)
+        logger.info(
+            "[solver] extended solve finished: status=%s wall_time=%.1fs",
+            {0: "UNKNOWN", 2: "FEASIBLE", 3: "INFEASIBLE", 4: "OPTIMAL"}.get(int(status), str(status)),
+            solver.WallTime(),
+        )
+
+    logger.info(
+        "[solver] solve complete: status=%s wall_time=%.1fs",
+        {0: "UNKNOWN", 2: "FEASIBLE", 3: "INFEASIBLE", 4: "OPTIMAL"}.get(int(status), str(status)),
+        solver.WallTime(),
+    )
 
     # 9. Handle infeasible / error
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):

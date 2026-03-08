@@ -1383,7 +1383,8 @@ def solve_timetable(
     try:
         max_time_seconds = float(payload.max_time_seconds)
         if settings.environment.lower() == "production":
-            max_time_seconds = min(max_time_seconds, 30.0)
+            # Enforce 5-minute ceiling in production; callers may request less.
+            max_time_seconds = min(max_time_seconds, 300.0)
 
         # Explicit connectivity validation before creating any rows.
         validate_db_connection(db)
@@ -1578,6 +1579,7 @@ def solve_timetable(
             max_time_seconds=max_time_seconds,
             enforce_teacher_load_limits=not payload.relax_teacher_load_limits,
             require_optimal=payload.require_optimal,
+            allow_extended_solve=getattr(payload, "allow_extended_solve", False),
         )
 
         # Soft conflicts (warnings) created during solve (e.g., room assignment conflicts).
@@ -1605,6 +1607,10 @@ def solve_timetable(
             else (False if str(result.status) == "OPTIMAL" else None),
             warnings=getattr(result, "warnings", []) or [],
             solver_stats=getattr(result, "solver_stats", {}) or {},
+            best_bound=getattr(result, "best_objective_bound", None),
+            optimality_gap=getattr(result, "optimality_gap", None),
+            solve_time_seconds=getattr(result, "solve_time_seconds", None),
+            message=getattr(result, "message", None),
             conflicts=(
                 [
                     SolverConflict(
@@ -1754,14 +1760,15 @@ def solve_timetable_global(
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ):
     run: TimetableRun | None = None
-    """Program-wide solve endpoint.
+    """ Program-wide solve endpoint.
 
     Builds ONE CP-SAT model that schedules all active sections for the program across all academic years.
     """
     try:
         max_time_seconds = float(payload.max_time_seconds)
         if settings.environment.lower() == "production":
-            max_time_seconds = min(max_time_seconds, 30.0)
+            # Enforce 5-minute ceiling in production; callers may request less.
+            max_time_seconds = min(max_time_seconds, 300.0)
 
         validate_db_connection(db)
 
@@ -1950,6 +1957,7 @@ def solve_timetable_global(
             max_time_seconds=max_time_seconds,
             enforce_teacher_load_limits=not payload.relax_teacher_load_limits,
             require_optimal=payload.require_optimal,
+            allow_extended_solve=getattr(payload, "allow_extended_solve", False),
         )
 
         soft_conflicts: list[TimetableConflict] = []
@@ -1974,6 +1982,10 @@ def solve_timetable_global(
             improvements_possible=True if str(result.status) == "FEASIBLE" else (False if str(result.status) == "OPTIMAL" else None),
             warnings=getattr(result, "warnings", []) or [],
             solver_stats=getattr(result, "solver_stats", {}) or {},
+            best_bound=getattr(result, "best_objective_bound", None),
+            optimality_gap=getattr(result, "optimality_gap", None),
+            solve_time_seconds=getattr(result, "solve_time_seconds", None),
+            message=getattr(result, "message", None),
             conflicts=(
                 [
                     SolverConflict(

@@ -929,6 +929,54 @@ export function Timetable() {
             </button>
           </div>
 
+          <div className="inline-flex rounded-2xl border bg-white p-1 text-sm print:hidden">
+            <button
+              className={
+                'rounded-2xl px-3 py-2 text-sm font-semibold transition ' +
+                (runId ? 'text-indigo-700 hover:bg-indigo-50' : 'text-slate-400')
+              }
+              disabled={!runId}
+              onClick={() => {
+                const url = `/print/sections?runId=${encodeURIComponent(runId)}`
+                window.open(url, '_blank', 'noopener,noreferrer')
+              }}
+              type="button"
+              title="Official format: all sections (one page per section, A4 landscape)"
+            >
+              Official: All Sections
+            </button>
+            <button
+              className={
+                'rounded-2xl px-3 py-2 text-sm font-semibold transition ' +
+                (runId ? 'text-indigo-700 hover:bg-indigo-50' : 'text-slate-400')
+              }
+              disabled={!runId}
+              onClick={() => {
+                const url = `/print/rooms?runId=${encodeURIComponent(runId)}`
+                window.open(url, '_blank', 'noopener,noreferrer')
+              }}
+              type="button"
+              title="Official format: all rooms (one page per room, A4 landscape)"
+            >
+              Official: All Rooms
+            </button>
+            <button
+              className={
+                'rounded-2xl px-3 py-2 text-sm font-semibold transition ' +
+                (runId ? 'text-indigo-700 hover:bg-indigo-50' : 'text-slate-400')
+              }
+              disabled={!runId}
+              onClick={() => {
+                const url = `/print/faculty?runId=${encodeURIComponent(runId)}`
+                window.open(url, '_blank', 'noopener,noreferrer')
+              }}
+              type="button"
+              title="Official format: all faculty (one page per teacher, A4 landscape)"
+            >
+              Official: All Faculty
+            </button>
+          </div>
+
           <button
             className="btn-secondary text-sm font-medium text-slate-800 disabled:opacity-50"
             onClick={refreshRunsAndSlots}

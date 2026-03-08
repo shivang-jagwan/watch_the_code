@@ -24,12 +24,14 @@ class GenerateGlobalTimetableRequest(BaseModel):
 
 
 class SolveTimetableRequest(GenerateTimetableRequest):
-    max_time_seconds: float = Field(default=60.0, gt=0)
+    max_time_seconds: float = Field(default=300.0, gt=0)
     relax_teacher_load_limits: bool = False
     require_optimal: bool = True
     # New: debug capacity tables and smart relaxation mode
     debug_capacity_mode: bool = False
     smart_relaxation: bool = False
+    # Extended solve: if FEASIBLE after the initial budget, re-run with 2x time
+    allow_extended_solve: bool = False
 
 
 class SolveGlobalTimetableRequest(GenerateGlobalTimetableRequest):
@@ -38,6 +40,8 @@ class SolveGlobalTimetableRequest(GenerateGlobalTimetableRequest):
     require_optimal: bool = True
     debug_capacity_mode: bool = False
     smart_relaxation: bool = False
+    # Extended solve: if FEASIBLE after the initial budget, re-run with 2x time
+    allow_extended_solve: bool = False
 
 
 class SolverConflict(BaseModel):
@@ -78,6 +82,11 @@ class SolveTimetableResponse(BaseModel):
     solver_stats: dict[str, Any] = Field(default_factory=dict)
     # New: minimal relaxation suggestions when infeasible due to capacity
     minimal_relaxation: list[dict[str, Any]] = Field(default_factory=list)
+    # Time-budget result fields
+    best_bound: int | None = None
+    optimality_gap: int | None = None
+    solve_time_seconds: float | None = None
+    message: str | None = None
 
 
 class RunSummary(BaseModel):

@@ -21,9 +21,13 @@ import { SpecialAllotments } from './pages/SpecialAllotments'
 import { Conflicts } from './pages/Conflicts'
 import { Timetable } from './pages/Timetable'
 import { TimetablePrint } from './pages/TimetablePrint'
+import { PrintableTimetable } from './pages/PrintableTimetable'
 import { TimetablePrintAllSections } from './pages/TimetablePrintAllSections'
 import { TimetablePrintAllRooms } from './pages/TimetablePrintAllRooms'
 import { TimetablePrintAllFaculty } from './pages/TimetablePrintAllFaculty'
+import { OfficialPrintAllSections } from './pages/OfficialPrintAllSections'
+import { OfficialPrintAllFaculty } from './pages/OfficialPrintAllFaculty'
+import { OfficialPrintAllRooms } from './pages/OfficialPrintAllRooms'
 import { RequireAuth } from './routes/RequireAuth'
 import { RedirectIfAuth } from './routes/RedirectIfAuth'
 
@@ -74,9 +78,13 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/conflicts" element={<Conflicts />} />
             <Route path="/timetable" element={<Timetable />} />
             <Route path="/timetable/print" element={<TimetablePrint />} />
+            <Route path="/timetable/print-official" element={<PrintableTimetable />} />
             <Route path="/timetable/print-all/sections" element={<TimetablePrintAllSections />} />
             <Route path="/timetable/print-all/rooms" element={<TimetablePrintAllRooms />} />
             <Route path="/timetable/print-all/faculty" element={<TimetablePrintAllFaculty />} />
+            <Route path="/print/sections" element={<OfficialPrintAllSections />} />
+            <Route path="/print/faculty" element={<OfficialPrintAllFaculty />} />
+            <Route path="/print/rooms" element={<OfficialPrintAllRooms />} />
 
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>

@@ -52,6 +52,21 @@ def write_results(ctx: SolverContext, solver: cp_model.CpSolver, status: int) ->
     except Exception:
         ctx.objective_score = None
 
+    # Optimality bound & gap
+    try:
+        ctx.best_objective_bound = int(solver.BestObjectiveBound())
+        if ctx.objective_score is not None:
+            ctx.optimality_gap = max(0, ctx.objective_score - ctx.best_objective_bound)
+    except Exception:
+        ctx.best_objective_bound = None
+        ctx.optimality_gap = None
+
+    # Solve wall-time
+    try:
+        ctx.solve_time_seconds = float(solver.WallTime())
+    except Exception:
+        ctx.solve_time_seconds = None
+
     # Warnings
     _compute_warnings(ctx, solver)
 
@@ -69,9 +84,10 @@ def write_results(ctx: SolverContext, solver: cp_model.CpSolver, status: int) ->
     _write_combined_theory_entries(ctx, solver)
     _write_lab_entries(ctx, solver)
 
-    # Final status
+    # Final status and human-readable message
     if status == cp_model.OPTIMAL:
         run.status = "OPTIMAL"
+        ctx.message = "Optimal timetable found within the time budget."
     elif ctx.require_optimal:
         run.status = "SUBOPTIMAL"
         ctx.warnings.append(
@@ -87,8 +103,26 @@ def write_results(ctx: SolverContext, solver: cp_model.CpSolver, status: int) ->
                 metadata_json={"max_time_seconds": float(ctx.max_time_seconds)},
             )
         )
+        gap_info = (
+            f" (objective={ctx.objective_score}, bound={ctx.best_objective_bound}, gap={ctx.optimality_gap})"
+            if ctx.optimality_gap is not None
+            else ""
+        )
+        ctx.message = (
+            f"Solver found a valid timetable but optimality was not proven within the time budget."
+            f" More time may produce a better timetable.{gap_info}"
+        )
     else:
         run.status = "FEASIBLE"
+        gap_info = (
+            f" (objective={ctx.objective_score}, bound={ctx.best_objective_bound}, gap={ctx.optimality_gap})"
+            if ctx.optimality_gap is not None
+            else ""
+        )
+        ctx.message = (
+            f"Solver found a valid timetable but optimality was not proven within the time budget."
+            f" More time may produce a better timetable.{gap_info}"
+        )
     run.solver_version = "cp-sat-v1"
     try:
         db.commit()
@@ -105,6 +139,10 @@ def write_results(ctx: SolverContext, solver: cp_model.CpSolver, status: int) ->
         objective_score=ctx.objective_score,
         warnings=ctx.warnings,
         solver_stats=ctx.solver_stats,
+        best_objective_bound=ctx.best_objective_bound,
+        optimality_gap=ctx.optimality_gap,
+        solve_time_seconds=ctx.solve_time_seconds,
+        message=ctx.message,
     )
 
 
@@ -316,11 +354,19 @@ def _compute_quality_score(ctx: SolverContext) -> None:
 
 
 def _make_entry(ctx: SolverContext, **kwargs: Any) -> TimetableEntry:
-    """Create a TimetableEntry, run invariant checks, add to DB, increment counter."""
+    """Create a TimetableEntry, run invariant checks, add to DB, increment counter.
+
+    OPTIMIZATION (Task 6): each written entry is indexed into
+    ctx.entries_by_slot[slot_id] as it is created.  This gives O(1)
+    slot lookups for any post-write conflict or utilisation analysis,
+    avoiding an O(E²) pairwise scan over all output entries.
+    """
     entry = TimetableEntry(**kwargs)
     assert_entry_invariants(ctx, entry)
     ctx.db.add(entry)
     ctx.entries_written += 1
+    # O(E) slot index — populated once per entry, free to query later.
+    ctx.entries_by_slot[entry.slot_id].append(entry)
     return entry
 
 

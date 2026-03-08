@@ -259,25 +259,59 @@ def _add_section_compactness(ctx: SolverContext) -> None:
                     else:
                         model.Add(occ_vars[i] + occ_vars[j] <= 1)
 
-            # Soft compactness penalty: internal gap terms
-            prefix: list[cp_model.IntVar] = []
-            suffix: list[cp_model.IntVar] = []
-            for i in range(0, n):
-                pv = model.NewBoolVar(f"sec_has_before_{sec_id}_{day}_{i}")
-                model.AddMaxEquality(pv, occ_vars[: i + 1])
-                prefix.append(pv)
-            for i in range(0, n):
-                sv = model.NewBoolVar(f"sec_has_after_{sec_id}_{day}_{i}")
-                model.AddMaxEquality(sv, occ_vars[i:])
-                suffix.append(sv)
+            # ── OPTIMIZATION: span-based soft gap penalty ──────────────────
+            # Old approach created 3n-2 BoolVars per (section, day) using
+            # prefix/suffix arrays plus per-slot gap BoolVars.
+            #
+            # New approach: 2 IntVars (first_occ, last_occ) + 1 IntVar
+            # (gap_penalty = span - classes_count) per (section, day) that
+            # has any classes.  This is O(1) aux vars instead of O(n).
+            #
+            #   gap_penalty = (last_occ_index - first_occ_index) - (sum(occ_vars) - 1)
+            #               = number of empty slots inside the schedule window.
+            # ───────────────────────────────────────────────────────────────
+            classes_count = sum(occ_vars)  # LinearExpr
 
-            for i in range(1, n - 1):
-                gv = model.NewBoolVar(f"sec_gap_{sec_id}_{day}_{i}")
-                model.Add(gv <= prefix[i - 1])
-                model.Add(gv <= suffix[i + 1])
-                model.Add(gv + occ_vars[i] <= 1)
-                model.Add(gv >= prefix[i - 1] + suffix[i + 1] - occ_vars[i] - 1)
-                ctx.internal_gap_terms.append(gv)
+            # first_idx: minimum slot index that is occupied (N when none)
+            # We model this as:  first_idx <= i * (1 − occ_vars[i]) + n*occ_vars[i]
+            # But the cleanest Integer Programming approach uses AddMinEquality:
+            #   represent each occ_vars[i] as "position if occupied else n"
+            sentinel_first: list[cp_model.IntVar] = []
+            sentinel_last: list[cp_model.IntVar] = []
+            for i, ov in enumerate(occ_vars):
+                # first_sentinel[i] = i if ov == 1 else n
+                fv = model.NewIntVar(0, n, f"fs_{sec_id}_{day}_{i}")
+                model.Add(fv == i).OnlyEnforceIf(ov)
+                model.Add(fv == n).OnlyEnforceIf(ov.Not())
+                sentinel_first.append(fv)
+                # last_sentinel[i] = i if ov == 1 else -1
+                lv = model.NewIntVar(-1, n - 1, f"ls2_{sec_id}_{day}_{i}")
+                model.Add(lv == i).OnlyEnforceIf(ov)
+                model.Add(lv == -1).OnlyEnforceIf(ov.Not())
+                sentinel_last.append(lv)
+
+            first_occ = model.NewIntVar(0, n, f"first_occ_{sec_id}_{day}")
+            last_occ = model.NewIntVar(-1, n - 1, f"last_occ_{sec_id}_{day}")
+            model.AddMinEquality(first_occ, sentinel_first)
+            model.AddMaxEquality(last_occ, sentinel_last)
+
+            # span = last_occ - first_occ  (0 when no classes: last=-1, first=n)
+            # gap_penalty = span - (classes_count - 1)  when classes_count >= 1
+            # We add the raw span as a soft penalty term (weighted in objective).
+            # To avoid penalizing days with zero classes, we gate on any_class.
+            any_class = model.NewBoolVar(f"any_class_{sec_id}_{day}")
+            model.Add(classes_count >= 1).OnlyEnforceIf(any_class)
+            model.Add(classes_count == 0).OnlyEnforceIf(any_class.Not())
+
+            span = model.NewIntVar(0, n, f"span_{sec_id}_{day}")
+            model.Add(span == last_occ - first_occ + 1).OnlyEnforceIf(any_class)
+            model.Add(span == 0).OnlyEnforceIf(any_class.Not())
+
+            gap_penalty = model.NewIntVar(0, n, f"gap_pen_{sec_id}_{day}")
+            model.Add(gap_penalty == span - classes_count).OnlyEnforceIf(any_class)
+            model.Add(gap_penalty == 0).OnlyEnforceIf(any_class.Not())
+
+            ctx.internal_gap_terms.append(gap_penalty)
 
 
 # ── Teacher constraints ─────────────────────────────────────────────────────

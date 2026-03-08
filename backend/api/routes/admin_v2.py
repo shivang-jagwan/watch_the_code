@@ -694,6 +694,63 @@ def set_teacher_subject_sections(
     return AdminActionResult(ok=True, created=created, updated=updated, message="Updated strict assignments.")
 
 
+def _ensure_teacher_subject_sections(
+    db: Session,
+    *,
+    teacher_id: uuid.UUID,
+    subject_id: uuid.UUID,
+    section_ids: list[uuid.UUID],
+    tenant_id: uuid.UUID | None,
+) -> None:
+    """Force strict assignments for (teacher, subject, sections).
+
+    This mirrors admin assignment behavior and is used by legacy combined-group
+    create/update so users don't need a separate manual assignment step first.
+    """
+
+    desired = set(section_ids)
+    if not desired:
+        return
+
+    # Deactivate conflicting active assignments for other teachers on the same
+    # (subject, section) pairs.
+    q_conflicts = (
+        select(TeacherSubjectSection)
+        .where(TeacherSubjectSection.subject_id == subject_id)
+        .where(TeacherSubjectSection.section_id.in_(list(desired)))
+        .where(TeacherSubjectSection.teacher_id != teacher_id)
+        .where(TeacherSubjectSection.is_active.is_(True))
+    )
+    q_conflicts = where_tenant(q_conflicts, TeacherSubjectSection, tenant_id)
+    for row in db.execute(q_conflicts).scalars().all():
+        row.is_active = False
+
+    # Ensure requested teacher rows exist and are active.
+    q_existing = (
+        select(TeacherSubjectSection)
+        .where(TeacherSubjectSection.teacher_id == teacher_id)
+        .where(TeacherSubjectSection.subject_id == subject_id)
+    )
+    q_existing = where_tenant(q_existing, TeacherSubjectSection, tenant_id)
+    existing_rows = db.execute(q_existing).scalars().all()
+    by_section = {r.section_id: r for r in existing_rows}
+
+    for sid in desired:
+        row = by_section.get(sid)
+        if row is None:
+            db.add(
+                TeacherSubjectSection(
+                    tenant_id=tenant_id,
+                    teacher_id=teacher_id,
+                    subject_id=subject_id,
+                    section_id=sid,
+                    is_active=True,
+                )
+            )
+        elif not row.is_active:
+            row.is_active = True
+
+
 @router.get("/combined-subject-groups", response_model=list[CombinedSubjectGroupOut])
 def list_combined_subject_groups(
     program_code: str = Query(min_length=1),
@@ -978,25 +1035,14 @@ def create_combined_subject_group(
             created_at=group.created_at,
         )
 
-    # Legacy fallback: requires strict per-section assignment to be consistent with chosen teacher.
-    for sec in sections:
-        ok = (
-            db.execute(
-                where_tenant(
-                    select(TeacherSubjectSection.id)
-                    .where(TeacherSubjectSection.teacher_id == teacher.id)
-                    .where(TeacherSubjectSection.subject_id == subject.id)
-                    .where(TeacherSubjectSection.section_id == sec.id)
-                    .where(TeacherSubjectSection.is_active.is_(True))
-                    .limit(1),
-                    TeacherSubjectSection,
-                    tenant_id,
-                )
-            ).first()
-            is not None
-        )
-        if not ok:
-            raise HTTPException(status_code=422, detail="TEACHER_NOT_ASSIGNED_TO_SECTION_SUBJECT")
+    # Legacy fallback: auto-ensure strict assignments for selected sections.
+    _ensure_teacher_subject_sections(
+        db,
+        teacher_id=teacher.id,
+        subject_id=subject.id,
+        section_ids=[s.id for s in sections],
+        tenant_id=tenant_id,
+    )
 
     legacy_group = CombinedSubjectGroup(tenant_id=tenant_id, academic_year_id=year.id, subject_id=subject.id)
     db.add(legacy_group)
@@ -1159,25 +1205,14 @@ def update_combined_subject_group(
             created_at=group.created_at,
         )
 
-    # Legacy fallback: requires strict per-section assignment to be consistent with chosen teacher.
-    for sec in sections:
-        ok = (
-            db.execute(
-                where_tenant(
-                    select(TeacherSubjectSection.id)
-                    .where(TeacherSubjectSection.teacher_id == teacher.id)
-                    .where(TeacherSubjectSection.subject_id == subject.id)
-                    .where(TeacherSubjectSection.section_id == sec.id)
-                    .where(TeacherSubjectSection.is_active.is_(True))
-                    .limit(1),
-                    TeacherSubjectSection,
-                    tenant_id,
-                )
-            ).first()
-            is not None
-        )
-        if not ok:
-            raise HTTPException(status_code=422, detail="TEACHER_NOT_ASSIGNED_TO_SECTION_SUBJECT")
+    # Legacy fallback: auto-ensure strict assignments for selected sections.
+    _ensure_teacher_subject_sections(
+        db,
+        teacher_id=teacher.id,
+        subject_id=subject.id,
+        section_ids=[s.id for s in sections],
+        tenant_id=tenant_id,
+    )
 
     stmt_del = delete(CombinedSubjectSection).where(CombinedSubjectSection.combined_group_id == group.id)
     stmt_del = where_tenant(stmt_del, CombinedSubjectSection, tenant_id)

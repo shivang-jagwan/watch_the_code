@@ -88,36 +88,27 @@ def assert_entry_invariants(ctx: SolverContext, entry: TimetableEntry) -> None:
 def pick_room(ctx: SolverContext, slot_id: Any, subject_type: str, section_id: Any = None) -> tuple[Any | None, bool]:
     """Pick a free room of the right type for *slot_id*. Returns (room_id, ok).
 
-    When *section_id* is provided, rooms are sorted by best-fit capacity
-    (smallest room whose capacity >= section strength) to avoid wasting
-    large lecture halls on small sections.
+    OPTIMIZATION (Task 5): room candidates are pre-sorted by data_loader
+    _build_room_cache() into per-(section, type) best-fit lists.  This
+    eliminates the O(S) section-linear-scan and the O(R log R) per-call
+    sort from the old implementation, giving O(1) lookup + O(R) scan.
     """
     sid = _sid(slot_id)
-    if subject_type == "LAB":
-        candidates = list(ctx.rooms_by_type.get("LAB", []))
-    else:
-        candidates = [*ctx.rooms_by_type.get("CLASSROOM", []), *ctx.rooms_by_type.get("LT", [])]
+    tag = "LAB" if subject_type == "LAB" else "THEORY"
+
+    # Fast path: use pre-computed best-fit candidate list for this section.
+    candidates = (
+        ctx.room_candidates_by_section.get((section_id, tag))
+        if section_id is not None
+        else None
+    )
+
+    # Fallback: use the globally sorted base list (no section strength info).
+    if candidates is None:
+        candidates = ctx.lab_rooms_sorted if subject_type == "LAB" else ctx.theory_rooms_sorted
 
     if not candidates:
         return None, False
-
-    # Sort by best-fit capacity when section strength is known
-    if section_id is not None:
-        section = None
-        for s in ctx.sections:
-            if s.id == section_id:
-                section = s
-                break
-        if section is not None:
-            strength = int(getattr(section, "strength", 0) or 0)
-            if strength > 0:
-                # Partition: rooms that fit (cap >= strength) sorted by cap ASC,
-                # then rooms that are too small sorted by cap DESC (best effort).
-                fits = [r for r in candidates if int(getattr(r, "capacity", 0) or 0) >= strength]
-                too_small = [r for r in candidates if int(getattr(r, "capacity", 0) or 0) < strength]
-                fits.sort(key=lambda r: int(getattr(r, "capacity", 0) or 0))
-                too_small.sort(key=lambda r: int(getattr(r, "capacity", 0) or 0), reverse=True)
-                candidates = fits + too_small
 
     for room in candidates:
         rid = _rid(room.id)
@@ -136,9 +127,13 @@ def pick_room(ctx: SolverContext, slot_id: Any, subject_type: str, section_id: A
 
 
 def pick_lt_room(ctx: SolverContext, slot_id: Any) -> tuple[Any | None, bool]:
-    """Pick a free LT (or CLASSROOM fallback) room for *slot_id*."""
+    """Pick a free LT (or CLASSROOM fallback) room for *slot_id*.
+
+    OPTIMIZATION (Task 5): uses ctx.lt_plus_classroom_rooms_sorted which
+    is built once by _build_room_cache() — no list construction per call.
+    """
     sid = _sid(slot_id)
-    candidates = [*ctx.rooms_by_type.get("LT", []), *ctx.rooms_by_type.get("CLASSROOM", [])]
+    candidates = ctx.lt_plus_classroom_rooms_sorted
     if not candidates:
         return None, False
     for room in candidates:
@@ -157,8 +152,12 @@ def pick_lt_room(ctx: SolverContext, slot_id: Any) -> tuple[Any | None, bool]:
 
 
 def pick_room_for_block(ctx: SolverContext, slot_ids: list[str]) -> tuple[Any | None, bool]:
-    """Pick a single LAB room free across all *slot_ids* in a block."""
-    candidates = ctx.rooms_by_type.get("LAB", [])
+    """Pick a single LAB room free across all *slot_ids* in a block.
+
+    OPTIMIZATION (Task 5): uses ctx.lab_rooms_sorted (pre-sorted cap ASC)
+    — no list construction or sorting per call.
+    """
+    candidates = ctx.lab_rooms_sorted
     if not candidates:
         return None, False
 

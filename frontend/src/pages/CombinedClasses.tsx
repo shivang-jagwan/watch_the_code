@@ -76,12 +76,19 @@ export function CombinedClasses() {
   const usedSectionToGroupId = React.useMemo(() => {
     const map = new Map<string, string>()
     for (const g of groupsForSubject) {
-      for (const s of g.sections ?? []) {
-        map.set(String(s.section_code).toUpperCase(), g.id)
+      // Use draft state if the user has edited this group's sections,
+      // so that sections removed from a group's draft become available
+      // for a new group immediately (without needing to save first).
+      const draft = draftByGroupId[g.id]
+      const codes = draft
+        ? Array.from(draft.section_codes)
+        : (g.sections ?? []).map((s) => s.section_code)
+      for (const code of codes) {
+        map.set(String(code).toUpperCase(), g.id)
       }
     }
     return map
-  }, [groupsForSubject])
+  }, [groupsForSubject, draftByGroupId])
 
   async function refreshRulesData(nextYear = year) {
     setLoading(true)

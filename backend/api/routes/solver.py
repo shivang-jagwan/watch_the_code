@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.deps import get_tenant_id, require_admin
+from core.database import SessionLocal
 from api.tenant import get_by_id, where_tenant
 from core.config import settings
 from core.db import (
@@ -1752,119 +1754,64 @@ def solve_timetable(
         )
 
 
-@router.post("/solve-global", response_model=SolveTimetableResponse)
-def solve_timetable_global(
+def _global_solve_body(
+    run_id: uuid.UUID,
     payload: SolveGlobalTimetableRequest,
-    _admin=Depends(require_admin),
-    db: Session = Depends(get_db),
-    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
-):
-    run: TimetableRun | None = None
-    """ Program-wide solve endpoint.
+    tenant_id: uuid.UUID | None,
+    max_time_seconds: float,
+) -> None:
+    """Execute the full validation + solve in a background thread (own DB session).
 
-    Builds ONE CP-SAT model that schedules all active sections for the program across all academic years.
+    Results are written to DB so the caller can poll GET /api/solver/runs/{run_id}.
     """
+    db = SessionLocal()
     try:
-        max_time_seconds = float(payload.max_time_seconds)
-        if settings.environment.lower() == "production":
-            # Enforce 5-minute ceiling in production; callers may request less.
-            max_time_seconds = min(max_time_seconds, 300.0)
-
-        validate_db_connection(db)
-
-        run = TimetableRun(
-            tenant_id=tenant_id,
-            academic_year_id=None,
-            seed=payload.seed,
-            status="CREATED",
-            parameters={
-                "program_code": payload.program_code,
-                "max_time_seconds": max_time_seconds,
-                "relax_teacher_load_limits": payload.relax_teacher_load_limits,
-                "require_optimal": payload.require_optimal,
-                "scope": "PROGRAM_GLOBAL",
-                **({"tenant_id": str(tenant_id)} if tenant_id is not None else {}),
-            },
-        )
-        db.add(run)
-        db.flush()
-        # Ensure we have a persistent run_id even if the solve crashes later.
-        db.commit()
+        run = db.get(TimetableRun, run_id)
+        if run is None:
+            logger.error("_global_solve_body: run %s not found", run_id)
+            return
 
         q_program = where_tenant(select(Program).where(Program.code == payload.program_code), Program, tenant_id)
         program = db.execute(q_program).scalar_one_or_none()
         if program is None:
             run.status = "VALIDATION_FAILED"
+            run.notes = f"Unknown program_code {payload.program_code!r}."
             db.commit()
-            return SolveTimetableResponse(
-                run_id=run.id,
-                status="FAILED_VALIDATION",
-                conflicts=[
-                    SolverConflict(
-                        conflict_type="PROGRAM_NOT_FOUND",
-                        message=f"Unknown program_code '{payload.program_code}'.",
-                    )
-                ],
-            )
+            return
 
-        q_sections = select(Section).where(Section.program_id == program.id).where(Section.is_active.is_(True))
+        q_sections = (
+            select(Section)
+            .where(Section.program_id == program.id)
+            .where(Section.is_active.is_(True))
+        )
         q_sections = where_tenant(q_sections, Section, tenant_id).order_by(Section.code)
         sections = db.execute(q_sections).scalars().all()
         if not sections:
             run.status = "VALIDATION_FAILED"
+            run.notes = f"No active sections for program {payload.program_code!r}."
             db.commit()
-            return SolveTimetableResponse(
-                run_id=run.id,
-                status="FAILED_VALIDATION",
-                conflicts=[
-                    SolverConflict(
-                        conflict_type="NO_ACTIVE_SECTIONS",
-                        message=f"No active sections found for program '{payload.program_code}'.",
-                    )
-                ],
-            )
+            return
 
         run.parameters = {
             **(run.parameters or {}),
             "academic_year_ids": sorted({str(s.academic_year_id) for s in sections}),
         }
 
-        conflicts = validate_prereqs(
+        prereq_conflicts = validate_prereqs(
             db,
             run=run,
             program_id=program.id,
             academic_year_id=None,
             sections=sections,
         )
-        errors = [c for c in conflicts if str(c.severity).upper() != "WARN"]
-        warnings = [c for c in conflicts if str(c.severity).upper() == "WARN"]
+        errors = [c for c in prereq_conflicts if str(c.severity).upper() != "WARN"]
         if errors:
             run.status = "VALIDATION_FAILED"
             db.commit()
-            return SolveTimetableResponse(
-                run_id=run.id,
-                status="FAILED_VALIDATION",
-                conflicts=[
-                    SolverConflict(
-                        severity=c.severity,
-                        conflict_type=c.conflict_type,
-                        message=c.message,
-                        section_id=c.section_id,
-                        teacher_id=c.teacher_id,
-                        subject_id=c.subject_id,
-                        room_id=c.room_id,
-                        slot_id=c.slot_id,
-                        details=(c.metadata or {}),
-                        metadata=(c.metadata or {}),
-                    )
-                    for c in conflicts
-                ],
-            )
+            return
 
-        # Pre-solve capacity analysis and bottleneck reporting (global)
-        # Capacity analysis is diagnostic + early validation, but it should not be allowed to hard-crash solving.
         cap: dict = {"issues": [], "debug": False, "summary": {}, "minimal_relaxation": []}
-        capacity_diagnostics: list[dict] = []
+        capacity_diagnostics: list = []
         try:
             cap_data = build_capacity_data(
                 db,
@@ -1875,7 +1822,7 @@ def solve_timetable_global(
             )
             cap = analyze_capacity(cap_data, debug=getattr(payload, "debug_capacity_mode", False))
             capacity_diagnostics = (
-                ([{"type": "CAPACITY_SUMMARY", "data": cap.get("summary", {})}] if cap.get("debug") else [])
+                [{"type": "CAPACITY_SUMMARY", "data": cap.get("summary", {})}] if cap.get("debug") else []
             )
         except Exception as e:
             db.add(
@@ -1900,30 +1847,12 @@ def solve_timetable_global(
             getattr(payload, "smart_relaxation", False) and only_teacher_overload
         ):
             run.status = "VALIDATION_FAILED"
+            run.notes = f"Capacity analysis found {len(cap['issues'])} blocking shortages"
             db.commit()
-            return SolveTimetableResponse(
-                run_id=run.id,
-                status="FAILED_VALIDATION",
-                reason_summary=f"Capacity analysis found {len(cap['issues'])} blocking shortages",
-                diagnostics=capacity_diagnostics,
-                minimal_relaxation=cap.get("minimal_relaxation", []),
-                conflicts=[
-                    SolverConflict(
-                        severity="ERROR",
-                        conflict_type=i.get("type") or "CAPACITY",
-                        message=f"{i.get('resource')}: required={i.get('required_slots')} available={i.get('available_slots')} shortage={i.get('shortage')}",
-                        details={k: v for k, v in i.items() if k not in {"type", "required_slots", "available_slots", "shortage", "resource"}},
-                        metadata={k: v for k, v in i.items() if k not in {"type"}},
-                    )
-                    for i in cap.get("issues", [])
-                ],
-            )
+            return
 
-        # Smart relaxation: auto-relax teacher loads when only teacher capacity issues
-        auto_relaxed = False
         if getattr(payload, "smart_relaxation", False) and only_teacher_overload:
             payload.relax_teacher_load_limits = True
-            auto_relaxed = True
             db.add(
                 TimetableConflict(
                     tenant_id=tenant_id,
@@ -1943,7 +1872,7 @@ def solve_timetable_global(
                     run_id=run.id,
                     severity="WARN",
                     conflict_type="RELAXED_TEACHER_LOAD_LIMITS",
-                    message="Solved with teacher load limits disabled (max_per_day/max_per_week not enforced).",
+                    message="Solved with teacher load limits disabled.",
                     metadata_json={},
                 )
             )
@@ -1960,81 +1889,89 @@ def solve_timetable_global(
             allow_extended_solve=getattr(payload, "allow_extended_solve", False),
         )
 
-        soft_conflicts: list[TimetableConflict] = []
-        if str(result.status) in {"FEASIBLE", "OPTIMAL"}:
-            q_soft = (
-                select(TimetableConflict)
-                .where(TimetableConflict.run_id == run.id)
-                .where(TimetableConflict.severity == "WARN")
-                .order_by(TimetableConflict.created_at.asc())
-                .limit(200)
-            )
-            q_soft = where_tenant(q_soft, TimetableConflict, tenant_id)
-            soft_conflicts = db.execute(q_soft).scalars().all()
+        # Persist solver stats so the polling endpoint can surface them.
+        try:
+            run.parameters = {
+                **(run.parameters or {}),
+                "_solver_result": {
+                    "objective_score": getattr(result, "objective_score", None),
+                    "solver_stats": getattr(result, "solver_stats", {}) or {},
+                    "best_bound": getattr(result, "best_objective_bound", None),
+                    "optimality_gap": getattr(result, "optimality_gap", None),
+                    "solve_time_seconds": getattr(result, "solve_time_seconds", None),
+                    "entries_written": result.entries_written,
+                    "reason_summary": getattr(result, "reason_summary", None),
+                    "warnings": getattr(result, "warnings", []) or [],
+                    "diagnostics": (capacity_diagnostics + (getattr(result, "diagnostics", []) or [])),
+                    "message": getattr(result, "message", None),
+                },
+            }
+            db.commit()
+        except Exception:
+            pass
+
+    except Exception as exc:
+        logger.exception("_global_solve_body crashed for run %s", run_id)
+        try:
+            db.rollback()
+            fresh = db.get(TimetableRun, run_id)
+            if fresh is not None and str(fresh.status) in {"CREATED", ""}:
+                fresh.status = "ERROR"
+                fresh.notes = f"{type(exc).__name__}: {str(exc)}"[:500]
+                db.commit()
+        except Exception:
+            pass
+    finally:
+        db.close()
+
+
+@router.post("/solve-global", response_model=SolveTimetableResponse)
+def solve_timetable_global(
+    payload: SolveGlobalTimetableRequest,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+):
+    """Program-wide solve: returns RUNNING immediately, solves in background thread.
+
+    Poll GET /api/solver/runs/{run_id} to track completion.
+    """
+    try:
+        max_time_seconds = float(payload.max_time_seconds)
+        if settings.environment.lower() == "production":
+            max_time_seconds = min(max_time_seconds, 300.0)
+
+        validate_db_connection(db)
+
+        run = TimetableRun(
+            tenant_id=tenant_id,
+            academic_year_id=None,
+            seed=payload.seed,
+            status="CREATED",
+            parameters={
+                "program_code": payload.program_code,
+                "max_time_seconds": max_time_seconds,
+                "relax_teacher_load_limits": payload.relax_teacher_load_limits,
+                "require_optimal": payload.require_optimal,
+                "scope": "PROGRAM_GLOBAL",
+                **({"tenant_id": str(tenant_id)} if tenant_id is not None else {}),
+            },
+        )
+        db.add(run)
+        db.flush()
+        db.commit()
+        run_id = run.id
+
+        threading.Thread(
+            target=_global_solve_body,
+            args=(run_id, payload.model_copy(), tenant_id, max_time_seconds),
+            daemon=True,
+        ).start()
 
         return SolveTimetableResponse(
-            run_id=run.id,
-            status=result.status,
-            entries_written=result.entries_written,
-            reason_summary=getattr(result, "reason_summary", None),
-            diagnostics=(capacity_diagnostics + (getattr(result, "diagnostics", []) or [])),
-            objective_score=getattr(result, "objective_score", None),
-            improvements_possible=True if str(result.status) == "FEASIBLE" else (False if str(result.status) == "OPTIMAL" else None),
-            warnings=getattr(result, "warnings", []) or [],
-            solver_stats=getattr(result, "solver_stats", {}) or {},
-            best_bound=getattr(result, "best_objective_bound", None),
-            optimality_gap=getattr(result, "optimality_gap", None),
-            solve_time_seconds=getattr(result, "solve_time_seconds", None),
-            message=getattr(result, "message", None),
-            conflicts=(
-                [
-                    SolverConflict(
-                        severity=c.severity,
-                        conflict_type=c.conflict_type,
-                        message=c.message,
-                        section_id=c.section_id,
-                        teacher_id=c.teacher_id,
-                        subject_id=c.subject_id,
-                        room_id=c.room_id,
-                        slot_id=c.slot_id,
-                        details=(c.metadata or {}),
-                        metadata=(c.metadata or {}),
-                    )
-                    for c in warnings
-                ]
-                + [
-                    SolverConflict(
-                        id=c.id,
-                        severity=c.severity,
-                        conflict_type=c.conflict_type,
-                        message=c.message,
-                        section_id=c.section_id,
-                        teacher_id=c.teacher_id,
-                        subject_id=c.subject_id,
-                        room_id=c.room_id,
-                        slot_id=c.slot_id,
-                        details=(c.details_json or c.metadata_json or {}),
-                        metadata=c.metadata_json or {},
-                    )
-                    for c in result.conflicts
-                ]
-            ),
-            soft_conflicts=[
-                SolverConflict(
-                    id=c.id,
-                    severity=c.severity,
-                    conflict_type=c.conflict_type,
-                    message=c.message,
-                    section_id=c.section_id,
-                    teacher_id=c.teacher_id,
-                    subject_id=c.subject_id,
-                    room_id=c.room_id,
-                    slot_id=c.slot_id,
-                    details=(c.details_json or c.metadata_json or {}),
-                    metadata=(c.metadata_json or c.details_json or {}),
-                )
-                for c in soft_conflicts
-            ],
+            run_id=run_id,
+            status="RUNNING",
+            entries_written=0,
         )
 
     except DatabaseUnavailableError:
@@ -2045,84 +1982,13 @@ def solve_timetable_global(
         if is_transient_db_connectivity_error(exc):
             raise DatabaseUnavailableError("Database temporarily unavailable") from exc
         raise
-    except SolverInvariantError as exc:
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        run_id = (run.id if run is not None else uuid.uuid4())
-        if run is not None:
-            try:
-                run.status = "ERROR"
-                run.notes = (f"SolverInvariantError({exc.code}): {str(exc)}")[:500]
-                db.add(run)
-                db.commit()
-            except Exception:
-                pass
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "SOLVER_INTEGRITY_ERROR",
-                "type": str(exc.code),
-                "message": str(exc),
-                "run_id": str(run_id),
-                "details": getattr(exc, "details", {}) or {},
-            },
-        )
-    except IntegrityError as exc:
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        run_id = (run.id if run is not None else uuid.uuid4())
-        if run is not None:
-            try:
-                run.status = "ERROR"
-                run.notes = (f"IntegrityError: {str(exc.orig) if getattr(exc, 'orig', None) else str(exc)}")[:500]
-                db.add(run)
-                db.commit()
-            except Exception:
-                pass
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "SOLVER_DB_INTEGRITY_ERROR",
-                "message": "Database integrity constraint violated while saving solver results.",
-                "run_id": str(run_id),
-            },
-        )
     except Exception as exc:
         try:
             db.rollback()
         except Exception:
             pass
-        notes: str | None = None
-        if run is not None:
-            try:
-                run.status = "ERROR"
-                run.notes = (f"{type(exc).__name__}: {str(exc)}")[:500]
-                notes = run.notes
-                db.add(run)
-                db.commit()
-            except Exception:
-                pass
-        logger.exception("/api/solver/solve-global crashed")
-        return SolveTimetableResponse(
-            run_id=(run.id if run is not None else uuid.uuid4()),
-            status="ERROR",
-            entries_written=0,
-            conflicts=[
-                SolverConflict(
-                    severity="ERROR",
-                    conflict_type="INTERNAL_ERROR",
-                    message="Internal error while solving.",
-                    details={
-                        "run_id": str(run.id) if run is not None else None,
-                        "error": notes,
-                    },
-                    metadata={"run_id": str(run.id) if run is not None else None},
-                )
-            ],
+        logger.exception("/api/solver/solve-global startup failed")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "SOLVER_STARTUP_ERROR", "message": str(exc)},
         )
-
-

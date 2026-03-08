@@ -37,7 +37,7 @@ export type GenerateTimetableResponse = {
 
 export type SolveTimetableResponse = {
   run_id: string
-  status: 'FAILED_VALIDATION' | 'INFEASIBLE' | 'FEASIBLE' | 'SUBOPTIMAL' | 'OPTIMAL' | 'ERROR'
+  status: 'RUNNING' | 'FAILED_VALIDATION' | 'INFEASIBLE' | 'FEASIBLE' | 'SUBOPTIMAL' | 'OPTIMAL' | 'ERROR'
   entries_written: number
   conflicts: SolverConflict[]
 
@@ -48,6 +48,29 @@ export type SolveTimetableResponse = {
   warnings?: string[]
   soft_conflicts?: SolverConflict[]
   solver_stats?: Record<string, any>
+
+  // time-budget fields
+  best_bound?: number | null
+  optimality_gap?: number | null
+  solve_time_seconds?: number | null
+  message?: string | null
+}
+
+/** Poll /runs/{runId} every `intervalMs` ms until the run finishes (non-RUNNING status). */
+export async function pollRunUntilDone(
+  runId: string,
+  onTick: (detail: RunDetail) => void,
+  intervalMs = 4000,
+  timeoutMs = 360_000,
+): Promise<RunDetail> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs))
+    const detail = await getRun(runId)
+    onTick(detail)
+    if (detail.status !== 'RUNNING' && detail.status !== 'CREATED') return detail
+  }
+  throw new Error('Poll timeout: solver did not complete within the allowed time.')
 }
 
 export type SolveTimetableRequest = {

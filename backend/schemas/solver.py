@@ -68,7 +68,7 @@ class GenerateTimetableResponse(BaseModel):
 
 class SolveTimetableResponse(BaseModel):
     run_id: uuid.UUID
-    status: Literal["FAILED_VALIDATION", "INFEASIBLE", "FEASIBLE", "SUBOPTIMAL", "OPTIMAL", "ERROR"]
+    status: Literal["RUNNING", "FAILED_VALIDATION", "INFEASIBLE", "FEASIBLE", "SUBOPTIMAL", "OPTIMAL", "ERROR"]
     entries_written: int = 0
     conflicts: list[SolverConflict] = Field(default_factory=list)
 

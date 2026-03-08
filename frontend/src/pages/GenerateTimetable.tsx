@@ -5,8 +5,10 @@ import {
   generateTimetableGlobal,
   listTimeSlots,
   solveTimetableGlobal,
+  pollRunUntilDone,
   type SolverConflict,
   type SolveTimetableResponse,
+  type RunDetail,
 } from '../api/solver'
 import { useLayoutContext } from '../components/Layout'
 
@@ -44,6 +46,7 @@ export function GenerateTimetable() {
 
   const [lastRun, setLastRun] = React.useState<SolveTimetableResponse | null>(null)
   const [lastValidationConflicts, setLastValidationConflicts] = React.useState<SolverConflict[]>([])
+  const [pollStatus, setPollStatus] = React.useState<string | null>(null)
 
   function showToast(message: string, ms = 2500) {
     setToast(message)
@@ -105,6 +108,7 @@ export function GenerateTimetable() {
       return
     }
     setLoading(true)
+    setPollStatus(null)
     setLastValidationConflicts([])
     setLastRun(null)
     try {
@@ -116,12 +120,49 @@ export function GenerateTimetable() {
         relax_teacher_load_limits: Boolean(relaxTeacherLoadLimits),
         require_optimal: Boolean(requireOptimal),
       })
-      setLastRun(res)
-      showToast(`Solve status: ${res.status}`)
+
+      if (res.status === 'RUNNING') {
+        // Backend accepted the job — poll until done
+        setLastRun(res)
+        setPollStatus('Solver running on server…')
+        showToast('Solver started — polling for completion…', 4000)
+        const detail: RunDetail = await pollRunUntilDone(
+          res.run_id,
+          (d) => {
+            const elapsed = d.notes ? ` (${d.notes.slice(0, 60)})` : ''
+            setPollStatus(`Solving… status: ${d.status}${elapsed}`)
+          },
+        )
+        // Build a compatible response shape from the RunDetail + saved _solver_result
+        const sr: Record<string, any> = (detail.parameters as any)?._solver_result ?? {}
+        const finalRun: SolveTimetableResponse = {
+          run_id: detail.id,
+          status: detail.status as SolveTimetableResponse['status'],
+          entries_written: sr.entries_written ?? detail.entries_total ?? 0,
+          conflicts: [],
+          reason_summary: sr.reason_summary ?? detail.notes ?? null,
+          diagnostics: sr.diagnostics ?? [],
+          objective_score: sr.objective_score ?? null,
+          warnings: sr.warnings ?? [],
+          solver_stats: sr.solver_stats ?? {},
+          best_bound: sr.best_bound ?? null,
+          optimality_gap: sr.optimality_gap ?? null,
+          solve_time_seconds: sr.solve_time_seconds ?? null,
+          message: sr.message ?? null,
+        }
+        setLastRun(finalRun)
+        setPollStatus(null)
+        showToast(`Solve complete: ${finalRun.status}`)
+      } else {
+        // Synchronous response (validation failure, error, etc.)
+        setLastRun(res)
+        showToast(`Solve status: ${res.status}`)
+      }
     } catch (e: any) {
       showToast(`Solve failed: ${String(e?.message ?? e)}`, 3500)
     } finally {
       setLoading(false)
+      setPollStatus(null)
     }
   }
 
@@ -300,6 +341,12 @@ export function GenerateTimetable() {
               </button>
             </div>
 
+            {pollStatus ? (
+              <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800">
+                <span className="animate-pulse">⏳</span> {pollStatus}
+              </div>
+            ) : null}
+
             {lastRun ? (
               <div className="rounded-2xl border bg-slate-50 p-4">
                 <div className="text-sm font-semibold text-slate-900">Last solve</div>
@@ -316,7 +363,9 @@ export function GenerateTimetable() {
                             ? '🟡 SUBOPTIMAL'
                           : lastRun.status === 'FEASIBLE'
                             ? '🟡 FEASIBLE'
-                            : lastRun.status}
+                            : lastRun.status === 'RUNNING'
+                              ? '🔵 RUNNING'
+                              : lastRun.status}
                   </span>
                 </div>
                 <div className="mt-1 text-sm text-slate-700">Entries written: {lastRun.entries_written}</div>

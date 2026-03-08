@@ -90,6 +90,23 @@ export function CombinedClasses() {
     return map
   }, [groupsForSubject, draftByGroupId])
 
+  // Sections already in a group with the currently selected teacher (for the Add Group form).
+  const teacherLockedSections = React.useMemo(() => {
+    if (!newTeacherCode) return new Set<string>()
+    const set = new Set<string>()
+    for (const g of groupsForSubject) {
+      const tc = String(g.teacher_code ?? '').toUpperCase()
+      if (tc === String(newTeacherCode).toUpperCase()) {
+        const draft = draftByGroupId[g.id]
+        const codes = draft
+          ? Array.from(draft.section_codes)
+          : (g.sections ?? []).map((s) => s.section_code)
+        for (const code of codes) set.add(String(code).toUpperCase())
+      }
+    }
+    return set
+  }, [groupsForSubject, draftByGroupId, newTeacherCode])
+
   async function refreshRulesData(nextYear = year) {
     setLoading(true)
     try {
@@ -486,21 +503,35 @@ export function CombinedClasses() {
                               activeSections.map((sec) => {
                                 const secKey = String(sec.code).toUpperCase()
                                 const usedBy = usedSectionToGroupId.get(secKey)
-                                const disabled = Boolean(usedBy && usedBy !== g.id)
+                                const lockedByOther = Boolean(usedBy && usedBy !== g.id)
                                 const checked = Boolean(draft?.section_codes?.has(sec.code))
+                                if (lockedByOther) {
+                                  const ownerGroup = groupsForSubject.find((og) => og.id === usedBy)
+                                  return (
+                                    <div
+                                      key={sec.id}
+                                      className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2"
+                                      title={`Used in Group ${ownerGroup ? groupsForSubject.indexOf(ownerGroup) + 1 : '?'}`}
+                                    >
+                                      <svg viewBox="0 0 24 24" className="size-3.5 shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth="2">
+                                        <rect x="3" y="11" width="18" height="11" rx="2" />
+                                        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                                      </svg>
+                                      <span className="font-semibold text-slate-500">{sec.code}</span>
+                                      <span className="text-xs text-slate-400 truncate">used in another group</span>
+                                    </div>
+                                  )
+                                }
                                 return (
                                   <label key={sec.id} className="checkbox-row">
                                     <input
                                       type="checkbox"
                                       checked={checked}
                                       onChange={() => toggleDraftSection(g.id, sec.code)}
-                                      disabled={disabled || loading}
+                                      disabled={loading}
                                     />
                                     <span className="font-semibold text-slate-900">{sec.code}</span>
-                                    <span className="text-slate-600">
-                                      {sec.name}
-                                      {disabled ? ' (used in another group)' : ''}
-                                    </span>
+                                    <span className="text-slate-600">{sec.name}</span>
                                   </label>
                                 )
                               })
@@ -516,12 +547,12 @@ export function CombinedClasses() {
                 )}
 
                 {/* Create new group */}
-                <div className="rounded-2xl border bg-slate-50 p-4">
+                <div className="rounded-2xl border border-green-200 bg-slate-50 p-4">
                   <div className="flex flex-wrap items-end justify-between gap-3">
                     <div>
                       <div className="text-sm font-semibold text-slate-900">Add Group</div>
                       <div className="mt-1 text-xs text-slate-500">
-                        Sections cannot be repeated across groups for the same subject.
+                        A section can only belong to <strong>one</strong> combined group per subject.
                       </div>
                     </div>
                     <button
@@ -549,6 +580,34 @@ export function CombinedClasses() {
                     </div>
                   </div>
 
+                  {/* Teacher-assigned sections warning panel */}
+                  {newTeacherCode && teacherLockedSections.size > 0 && (
+                    <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-800">
+                        <svg viewBox="0 0 24 24" className="size-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+                          <rect x="3" y="11" width="18" height="11" rx="2" />
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                        </svg>
+                        Sections already assigned to this teacher
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {Array.from(teacherLockedSections)
+                          .sort()
+                          .map((code) => (
+                            <span
+                              key={code}
+                              className="rounded-lg bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900 border border-amber-300"
+                            >
+                              {code}
+                            </span>
+                          ))}
+                      </div>
+                      <p className="mt-1.5 text-xs text-amber-700">
+                        These sections are already in a combined group with this teacher for this subject and cannot be added again.
+                      </p>
+                    </div>
+                  )}
+
                   <div className="mt-4">
                     <div className="text-xs font-semibold text-slate-600">Sections (select 2+)</div>
                     <div className="mt-2 grid gap-2 md:grid-cols-3">
@@ -557,26 +616,75 @@ export function CombinedClasses() {
                       ) : (
                         activeSections.map((sec) => {
                           const secKey = String(sec.code).toUpperCase()
-                          const disabled = usedSectionToGroupId.has(secKey)
-                          const checked = newSelectedSectionCodes.has(sec.code)
+                          const isLocked = usedSectionToGroupId.has(secKey)
+                          const isLockedByThisTeacher = teacherLockedSections.has(secKey)
+                          const checked = !isLocked && newSelectedSectionCodes.has(sec.code)
+
+                          if (isLocked) {
+                            return (
+                              <div
+                                key={sec.id}
+                                className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${
+                                  isLockedByThisTeacher
+                                    ? 'border-amber-300 bg-amber-50'
+                                    : 'border-slate-200 bg-slate-50'
+                                }`}
+                                title={
+                                  isLockedByThisTeacher
+                                    ? 'Already assigned to this teacher'
+                                    : 'Already used in another group'
+                                }
+                              >
+                                <svg
+                                  viewBox="0 0 24 24"
+                                  className={`size-3.5 shrink-0 ${
+                                    isLockedByThisTeacher ? 'text-amber-500' : 'text-slate-400'
+                                  }`}
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                >
+                                  <rect x="3" y="11" width="18" height="11" rx="2" />
+                                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                                </svg>
+                                <span
+                                  className={`font-semibold ${
+                                    isLockedByThisTeacher ? 'text-amber-800' : 'text-slate-500'
+                                  }`}
+                                >
+                                  {sec.code}
+                                </span>
+                                <span
+                                  className={`text-xs truncate ${
+                                    isLockedByThisTeacher ? 'text-amber-700' : 'text-slate-400'
+                                  }`}
+                                >
+                                  {isLockedByThisTeacher ? 'already assigned' : 'used in another group'}
+                                </span>
+                              </div>
+                            )
+                          }
+
                           return (
                             <label key={sec.id} className="checkbox-row">
                               <input
                                 type="checkbox"
                                 checked={checked}
                                 onChange={() => toggleNewSection(sec.code)}
-                                disabled={disabled || loading}
+                                disabled={loading}
                               />
                               <span className="font-semibold text-slate-900">{sec.code}</span>
-                              <span className="text-slate-600">
-                                {sec.name}
-                                {disabled ? ' (used in another group)' : ''}
-                              </span>
+                              <span className="text-slate-600">{sec.name}</span>
                             </label>
                           )
                         })
                       )}
                     </div>
+                    {usedSectionToGroupId.size > 0 && (
+                      <p className="mt-2 text-xs text-slate-500">
+                        🔒 Locked sections are already assigned to an existing group for this subject and cannot be reused.
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>

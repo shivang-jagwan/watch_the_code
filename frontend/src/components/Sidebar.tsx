@@ -188,6 +188,19 @@ const NAV: NavItem[] = [
       </Icon>
     ),
   },
+  {
+    to: '/year-config',
+    label: 'Year Config',
+    icon: (
+      <Icon>
+        <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2Z" />
+          <path d="M12 8v4l3 3" />
+          <path d="M9.5 3.5A8 8 0 0 0 4.3 12" />
+        </svg>
+      </Icon>
+    ),
+  },
 ]
 
 export function Sidebar({

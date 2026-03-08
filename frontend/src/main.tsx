@@ -29,6 +29,7 @@ import { OfficialPrintAllSections } from './pages/OfficialPrintAllSections'
 import { OfficialPrintAllFaculty } from './pages/OfficialPrintAllFaculty'
 import { OfficialPrintAllRooms } from './pages/OfficialPrintAllRooms'
 import { ManualEditor } from './pages/ManualEditor'
+import { YearConfig } from './pages/YearConfig'
 import { RequireAuth } from './routes/RequireAuth'
 import { RedirectIfAuth } from './routes/RedirectIfAuth'
 
@@ -87,6 +88,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <Route path="/print/faculty" element={<OfficialPrintAllFaculty />} />
             <Route path="/print/rooms" element={<OfficialPrintAllRooms />} />
             <Route path="/manual-editor" element={<ManualEditor />} />
+            <Route path="/year-config" element={<YearConfig />} />
 
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Route>

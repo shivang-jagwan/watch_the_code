@@ -227,6 +227,7 @@ export function Dashboard() {
             <Link className="btn-primary text-sm" to="/generate">Generate</Link>
             <Link className="btn-secondary text-sm" to="/timetable">View Timetable</Link>
             <Link className="btn-secondary text-sm" to="/conflicts">Conflicts</Link>
+            <Link className="btn-secondary text-sm" to="/manual-editor">Manual Editor</Link>
           </div>
         </div>
 

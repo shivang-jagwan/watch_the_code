@@ -47,6 +47,7 @@ def contiguous_starts(sorted_indices: list[int], block: int) -> Iterator[int]:
 def apply_pre_solve_locks(ctx: SolverContext) -> None:
     """Process special allotments and fixed entries, marking slots as locked."""
     _ensure_elective_batches(ctx)
+    _warn_lunch_slot_conflicts(ctx)
     _apply_special_allotments(ctx)
     _apply_fixed_entries(ctx)
     _prune_teacher_slots(ctx)
@@ -77,6 +78,40 @@ def _ensure_elective_batches(ctx: SolverContext) -> None:
         for idx, batch in enumerate(batches):
             for sid in batch:
                 ctx.elective_batch_index_by_block_section[(block_id, sid)] = idx
+
+
+def _warn_lunch_slot_conflicts(ctx: SolverContext) -> None:
+    """Emit warnings for special allotments / fixed entries that land on a
+    lunch/break slot.  These entries will be scheduled (the solver does not
+    block them) but the administrator should review them."""
+    if not ctx.lunch_slot_ids:
+        return
+
+    for sa in ctx.special_allotments:
+        if sa.slot_id in ctx.lunch_slot_ids:
+            subj = ctx.subject_by_id.get(sa.subject_id)
+            sec = next((s for s in ctx.sections if s.id == sa.section_id), None)
+            slot_info = ctx.slot_info.get(sa.slot_id, ("?", "?"))
+            ctx.warnings.append(
+                f"Special allotment for section "
+                f"{getattr(sec, 'code', sa.section_id)} / "
+                f"subject {getattr(subj, 'code', sa.subject_id)} "
+                f"is placed on a lunch/break slot "
+                f"(day {slot_info[0]}, index {slot_info[1]})."
+            )
+
+    for fe in ctx.fixed_entries:
+        if fe.slot_id in ctx.lunch_slot_ids:
+            subj = ctx.subject_by_id.get(fe.subject_id)
+            sec = next((s for s in ctx.sections if s.id == fe.section_id), None)
+            slot_info = ctx.slot_info.get(fe.slot_id, ("?", "?"))
+            ctx.warnings.append(
+                f"Fixed entry for section "
+                f"{getattr(sec, 'code', fe.section_id)} / "
+                f"subject {getattr(subj, 'code', fe.subject_id)} "
+                f"is placed on a lunch/break slot "
+                f"(day {slot_info[0]}, index {slot_info[1]})."
+            )
 
 
 def _apply_special_allotments(ctx: SolverContext) -> None:

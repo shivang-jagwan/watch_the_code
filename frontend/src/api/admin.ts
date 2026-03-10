@@ -75,6 +75,12 @@ export async function generateTimeSlots(
   })
 }
 
+export async function toggleLunchBreak(slotId: string): Promise<AdminActionResult> {
+  return apiFetch<AdminActionResult>(`/api/admin/time-slots/${slotId}/lunch-break`, {
+    method: 'PATCH',
+  })
+}
+
 export type ClearTimetablesRequest = {
   confirm: string
   academic_year_number?: number | null

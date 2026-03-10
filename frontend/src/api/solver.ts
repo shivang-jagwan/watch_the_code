@@ -171,6 +171,7 @@ export type TimeSlot = {
   slot_index: number
   start_time: string
   end_time: string
+  is_lunch_break?: boolean
 }
 
 export async function listRuns(params?: {

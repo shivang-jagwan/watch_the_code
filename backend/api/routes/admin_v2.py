@@ -395,6 +395,22 @@ def generate_time_slots(
     return AdminActionResult(ok=True, created=created, updated=updated, deleted=deleted)
 
 
+@router.patch("/time-slots/{slot_id}/lunch-break", response_model=AdminActionResult)
+def toggle_lunch_break(
+    slot_id: uuid.UUID,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+):
+    q = where_tenant(select(TimeSlot).where(TimeSlot.id == slot_id), TimeSlot, tenant_id)
+    slot = db.execute(q).scalar_one_or_none()
+    if slot is None:
+        raise HTTPException(status_code=404, detail="TIME_SLOT_NOT_FOUND")
+    slot.is_lunch_break = not bool(slot.is_lunch_break)
+    db.commit()
+    return AdminActionResult(ok=True, message=f"is_lunch_break set to {slot.is_lunch_break}")
+
+
 @router.post("/timetables/clear", response_model=AdminActionResult)
 def clear_timetables(
     payload: ClearTimetablesRequest,

@@ -1,6 +1,6 @@
 import React from 'react'
 import { Toast } from '../components/Toast'
-import { clearTimetables, generateTimeSlots } from '../api/admin'
+import { clearTimetables, generateTimeSlots, toggleLunchBreak } from '../api/admin'
 import { listTimeSlots, TimeSlot } from '../api/solver'
 
 const WEEKDAYS = [
@@ -289,25 +289,49 @@ export function TimeSlots() {
                   <th className="px-3 py-2 text-left font-semibold">Index</th>
                   <th className="px-3 py-2 text-left font-semibold">Start</th>
                   <th className="px-3 py-2 text-left font-semibold">End</th>
+                  <th className="px-3 py-2 text-left font-semibold">Lunch / Break</th>
                   <th className="px-3 py-2 text-left font-semibold">ID</th>
                 </tr>
               </thead>
               <tbody>
                 {slots.length === 0 ? (
                   <tr>
-                    <td className="px-3 py-4 text-slate-600" colSpan={5}>
+                    <td className="px-3 py-4 text-slate-600" colSpan={6}>
                       No time slots configured.
                     </td>
                   </tr>
                 ) : (
                   slots.map((s) => (
-                    <tr key={s.id} className="border-t">
+                    <tr key={s.id} className={`border-t ${s.is_lunch_break ? 'bg-amber-50' : ''}`}>
                       <td className="px-3 py-2 font-medium text-slate-900">
                         {WEEKDAYS.find((d) => d.value === s.day_of_week)?.label ?? String(s.day_of_week)}
                       </td>
                       <td className="px-3 py-2 text-slate-700">{s.slot_index}</td>
                       <td className="px-3 py-2 text-slate-700">{s.start_time}</td>
                       <td className="px-3 py-2 text-slate-700">{s.end_time}</td>
+                      <td className="px-3 py-2">
+                        <button
+                          className={`rounded-full px-2 py-0.5 text-xs font-semibold transition-colors ${
+                            s.is_lunch_break
+                              ? 'bg-amber-200 text-amber-800 hover:bg-amber-300'
+                              : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                          }`}
+                          disabled={loading}
+                          onClick={async () => {
+                            setLoading(true)
+                            try {
+                              await toggleLunchBreak(s.id)
+                              await refresh()
+                            } catch (e: any) {
+                              showToast(`Toggle failed: ${String(e?.message ?? e)}`, 3500)
+                              setLoading(false)
+                            }
+                          }}
+                          title={s.is_lunch_break ? 'Click to unmark lunch/break' : 'Click to mark as lunch/break'}
+                        >
+                          {s.is_lunch_break ? 'Lunch/Break' : 'Mark'}
+                        </button>
+                      </td>
                       <td className="px-3 py-2 font-mono text-xs text-slate-500">{s.id}</td>
                     </tr>
                   ))

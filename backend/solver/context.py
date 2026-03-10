@@ -131,6 +131,9 @@ class SolverContext:
     # teacher_id → list[TeacherTimeWindow]; populated by data_loader
     teacher_windows_by_id: dict[Any, list] = field(default_factory=lambda: defaultdict(list))
 
+    # Set of slot_ids marked as lunch/break periods; solver refuses to schedule here
+    lunch_slot_ids: set[Any] = field(default_factory=set)
+
     # Elective blocks
     blocks_by_section: dict[Any, list[Any]] = field(default_factory=lambda: defaultdict(list))
     sections_by_block: dict[Any, list[Any]] = field(default_factory=lambda: defaultdict(list))

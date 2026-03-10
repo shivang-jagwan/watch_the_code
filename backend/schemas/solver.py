@@ -158,6 +158,7 @@ class TimeSlotOut(BaseModel):
     slot_index: int
     start_time: str
     end_time: str
+    is_lunch_break: bool = False
 
 
 class ListTimeSlotsResponse(BaseModel):

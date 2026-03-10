@@ -65,6 +65,7 @@ def load_all(ctx: SolverContext) -> None:
     ctx.slots = db.execute(where_tenant(select(TimeSlot), TimeSlot, tenant_id)).scalars().all()
     ctx.slot_by_day_index = {(s.day_of_week, s.slot_index): s for s in ctx.slots}
     ctx.slot_info = {s.id: (s.day_of_week, s.slot_index) for s in ctx.slots}
+    ctx.lunch_slot_ids = {s.id for s in ctx.slots if bool(getattr(s, "is_lunch_break", False))}
     for s in ctx.slots:
         ctx.slots_by_day[s.day_of_week].append(s)
     for d in ctx.slots_by_day:
@@ -290,7 +291,7 @@ def _load_allowed_slots(ctx: SolverContext) -> None:
         for w in ctx.windows_by_section.get(section.id, []):
             for si in range(w.start_slot_index, w.end_slot_index + 1):
                 ts = ctx.slot_by_day_index.get((w.day_of_week, si))
-                if ts is not None:
+                if ts is not None and ts.id not in ctx.lunch_slot_ids:
                     ctx.allowed_slots_by_section[section.id].add(ts.id)
 
     # Remove section breaks

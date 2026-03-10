@@ -852,6 +852,7 @@ def list_time_slots(
                 slot_index=int(s.slot_index),
                 start_time=s.start_time.strftime("%H:%M"),
                 end_time=s.end_time.strftime("%H:%M"),
+                is_lunch_break=bool(getattr(s, "is_lunch_break", False)),
             )
             for s in slots
         ]

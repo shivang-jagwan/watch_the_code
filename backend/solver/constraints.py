@@ -28,6 +28,8 @@ def add_constraints(ctx: SolverContext) -> None:
     _add_section_no_overlap(ctx)
     _add_section_compactness(ctx)
     _add_subject_day_spread(ctx)
+    _add_no_consecutive_same_subject(ctx)
+    _add_lunch_break_constraint(ctx)
     _add_teacher_no_overlap(ctx)
     _add_teacher_weekly_off(ctx)
     _add_teacher_max_continuous(ctx)
@@ -523,3 +525,85 @@ def _add_daily_load_balance(ctx: SolverContext) -> None:
         spread = model.NewIntVar(0, 20, f"dspread_{sec_id}")
         model.Add(spread == max_load - min_load)
         ctx.daily_load_balance_terms.append(spread)
+
+
+# ── No consecutive same-subject (hard, THEORY only) ────────────────────────
+
+
+def _add_no_consecutive_same_subject(ctx: SolverContext) -> None:
+    """Hard constraint: a THEORY subject cannot occupy two back-to-back slots
+    for the same section on the same day.
+
+    Labs are intentionally excluded — they use contiguous blocks by design.
+    Combined-class theory vars are checked as well.
+    """
+    model = ctx.model
+
+    # Regular theory vars (ctx.x keyed by (sec_id, subj_id, slot_id))
+    for section in ctx.sections:
+        sec_id = section.id
+        for subj in ctx.subjects:
+            subj_id = subj.id
+            if str(getattr(subj, "subject_type", "THEORY")) != "THEORY":
+                continue
+            for day in range(6):
+                day_slots = ctx.slots_by_day.get(day, [])
+                for i in range(len(day_slots) - 1):
+                    ts_cur = day_slots[i]
+                    ts_next = day_slots[i + 1]
+                    # Only enforce for truly adjacent slot indices
+                    if int(ts_next.slot_index) != int(ts_cur.slot_index) + 1:
+                        continue
+                    xi = ctx.x.get((sec_id, subj_id, ts_cur.id))
+                    xj = ctx.x.get((sec_id, subj_id, ts_next.id))
+                    if xi is not None and xj is not None:
+                        model.Add(xi + xj <= 1)
+
+    # Combined-class theory vars (ctx.combined_x keyed by (gid, slot_id))
+    for gid, subj_id in ctx.group_subject.items():
+        subj = ctx.subject_by_id.get(subj_id)
+        if subj is None or str(getattr(subj, "subject_type", "THEORY")) != "THEORY":
+            continue
+        for day in range(6):
+            day_slots = ctx.slots_by_day.get(day, [])
+            for i in range(len(day_slots) - 1):
+                ts_cur = day_slots[i]
+                ts_next = day_slots[i + 1]
+                if int(ts_next.slot_index) != int(ts_cur.slot_index) + 1:
+                    continue
+                xi = ctx.combined_x.get((gid, ts_cur.id))
+                xj = ctx.combined_x.get((gid, ts_next.id))
+                if xi is not None and xj is not None:
+                    model.Add(xi + xj <= 1)
+
+
+# ── Lunch break protection (hard) ───────────────────────────────────────────
+
+
+def _add_lunch_break_constraint(ctx: SolverContext) -> None:
+    """Hard constraint: no class may be scheduled during a lunch/break slot.
+
+    Lunch slots are identified via ``ctx.lunch_slot_ids`` (populated by
+    data_loader from ``time_slots.is_lunch_break = TRUE``).
+
+    Note: ``_load_allowed_slots`` already excludes lunch slots from
+    ``allowed_slots_by_section``, so theory/lab variables for those slots are
+    never created.  This function enforces the constraint for combined-class
+    variables and any edge case where a variable might exist for a lunch slot.
+    """
+    if not ctx.lunch_slot_ids:
+        return
+
+    model = ctx.model
+
+    for slot_id in ctx.lunch_slot_ids:
+        # Section-level terms (theory + lab occupancy)
+        for section in ctx.sections:
+            for t in ctx.section_slot_terms.get((section.id, slot_id), []):
+                model.Add(t == 0)
+
+        # Combined-class vars
+        for gid in ctx.group_subject:
+            gv = ctx.combined_x.get((gid, slot_id))
+            if gv is not None:
+                model.Add(gv == 0)

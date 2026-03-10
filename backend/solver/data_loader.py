@@ -30,6 +30,7 @@ from models.section_subject import SectionSubject
 from models.section_time_window import SectionTimeWindow
 from models.subject import Subject
 from models.teacher import Teacher
+from models.teacher_time_window import TeacherTimeWindow
 from models.teacher_subject_section import TeacherSubjectSection
 from models.time_slot import TimeSlot
 from models.track_subject import TrackSubject
@@ -77,6 +78,18 @@ def load_all(ctx: SolverContext) -> None:
     windows = db.execute(q_windows).scalars().all()
     for w in windows:
         ctx.windows_by_section[w.section_id].append(w)
+
+    # --- Teacher time windows ------------------------------------------------
+    # Load availability windows once per solve so _prune_teacher_slots can use
+    # them without additional DB calls.
+    if ctx.teachers:
+        q_twins = select(TeacherTimeWindow).where(
+            TeacherTimeWindow.teacher_id.in_([t.id for t in ctx.teachers])
+        )
+        q_twins = where_tenant(q_twins, TeacherTimeWindow, tenant_id)
+        twin_rows = db.execute(q_twins).scalars().all()
+        for tw in twin_rows:
+            ctx.teacher_windows_by_id[tw.teacher_id].append(tw)
 
     # --- Rooms ---------------------------------------------------------------
     q_rooms = where_tenant(select(Room).where(Room.is_active.is_(True)), Room, tenant_id)

@@ -128,6 +128,8 @@ class SolverContext:
 
     section_required: dict[Any, list[tuple[Any, int | None]]] = field(default_factory=dict)
     windows_by_section: dict[Any, list] = field(default_factory=lambda: defaultdict(list))
+    # teacher_id → list[TeacherTimeWindow]; populated by data_loader
+    teacher_windows_by_id: dict[Any, list] = field(default_factory=lambda: defaultdict(list))
 
     # Elective blocks
     blocks_by_section: dict[Any, list[Any]] = field(default_factory=lambda: defaultdict(list))

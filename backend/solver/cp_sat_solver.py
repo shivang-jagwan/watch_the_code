@@ -34,7 +34,7 @@ import os
 from solver.constraints import add_constraints
 from solver.data_loader import load_all, build_pruned_slots
 from solver.objective import add_objective
-from solver.pre_solve_locks import apply_pre_solve_locks
+from solver.pre_solve_locks import apply_pre_solve_locks, check_teacher_window_feasibility
 from solver.result_writer import write_results
 from solver.variables import create_variables
 
@@ -128,6 +128,18 @@ def _solve_program(
     #     Must run AFTER apply_pre_solve_locks so teacher_disallowed_slot_ids
     #     is fully populated.  Variables step reads these lists directly.
     build_pruned_slots(ctx)
+
+    # 3c. Validate teacher time-window feasibility.  Collect warnings for
+    #     any (teacher, section) pair where the intersection of the teacher
+    #     window and the section window is empty.  These are surfaced in the
+    #     SolveResult so the frontend can show a clear message, but we do NOT
+    #     abort the solve — the infeasible pair will simply produce no
+    #     variables and the solver will report INFEASIBLE naturally.
+    tw_warnings = check_teacher_window_feasibility(ctx)
+    for w in tw_warnings:
+        logger.warning("[solver] teacher-window feasibility: %s", w)
+    if tw_warnings:
+        ctx.warnings.extend(tw_warnings)
 
     # 4. Create CP-SAT variables
     create_variables(ctx)

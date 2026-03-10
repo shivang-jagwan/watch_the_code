@@ -1,7 +1,9 @@
 import React from 'react'
-import type { Teacher, TeacherPut } from '../api/teachers'
+import type { Teacher, TeacherPut, TeacherTimeWindow } from '../api/teachers'
+import { getTeacherTimeWindows, putTeacherTimeWindows } from '../api/teachers'
 import { useModalScrollLock } from '../hooks/useModalScrollLock'
 import { PremiumSelect } from './PremiumSelect'
+import { listTimeSlots, type TimeSlot } from '../api/solver'
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -72,14 +74,38 @@ export function TeacherEditModal({
   const [form, setForm] = React.useState<FormState | null>(null)
   const [errors, setErrors] = React.useState<string[]>([])
 
+  // --- Time window state ---------------------------------------------------
+  const [timeSlots, setTimeSlots] = React.useState<TimeSlot[]>([])
+  const [windows, setWindows] = React.useState<TeacherTimeWindow[]>([])
+  const [windowsSaving, setWindowsSaving] = React.useState(false)
+  const [windowsError, setWindowsError] = React.useState('')
+  // Draft for adding a new window
+  const [newDay, setNewDay] = React.useState<string>('__all__')
+  const [newStart, setNewStart] = React.useState<string>('')
+  const [newEnd, setNewEnd] = React.useState<string>('')
+  // -------------------------------------------------------------------------
+
   React.useEffect(() => {
     if (!open || !teacher) {
       setForm(null)
       setErrors([])
+      setWindows([])
+      setWindowsError('')
+      setNewDay('__all__')
+      setNewStart('')
+      setNewEnd('')
       return
     }
     setForm(teacherToForm(teacher))
     setErrors([])
+    // Load time slots + existing windows in parallel
+    Promise.all([
+      listTimeSlots().catch(() => [] as TimeSlot[]),
+      getTeacherTimeWindows(teacher.id).catch(() => ({ teacher_id: teacher.id, windows: [] })),
+    ]).then(([slots, resp]) => {
+      setTimeSlots(slots)
+      setWindows(resp.windows ?? [])
+    })
   }, [open, teacher])
 
   React.useEffect(() => {
@@ -114,6 +140,87 @@ export function TeacherEditModal({
     await onSave(payload)
   }
 
+  // Build a label like "8:00 – 9:00" for a slot_index on a given day.
+  // Since slot times are the same across days we just look at day 0 first.
+  function slotLabel(slotIndex: number): string {
+    const ts = timeSlots.find((s) => s.slot_index === slotIndex)
+    if (!ts) return `Slot ${slotIndex}`
+    const fmt = (t: string) =>
+      t
+        ? new Date(`1970-01-01T${t}`).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : ''
+    return ts.start_time ? `${fmt(ts.start_time)} – ${fmt(ts.end_time)}` : `Slot ${slotIndex}`
+  }
+
+  // Unique slot indices across all days (sorted)
+  const allSlotIndices = React.useMemo(() => {
+    const seen = new Set<number>()
+    timeSlots.forEach((s) => seen.add(s.slot_index))
+    return Array.from(seen).sort((a, b) => a - b)
+  }, [timeSlots])
+
+  async function handleAddWindow() {
+    if (!teacher) return
+    if (newStart === '' || newEnd === '') {
+      setWindowsError('Please select both start and end slot.')
+      return
+    }
+    const start = Number(newStart)
+    const end = Number(newEnd)
+    if (end < start) {
+      setWindowsError('End slot must be >= start slot.')
+      return
+    }
+    setWindowsError('')
+    const dayVal = newDay === '__all__' ? null : Number(newDay)
+    // Check duplicate day in local state
+    const hasDup = windows.some((w) => w.day_of_week === dayVal)
+    if (hasDup) {
+      setWindowsError('A window for that day already exists. Remove it first.')
+      return
+    }
+    const nextWindows = [
+      ...windows.map((w) => ({
+        day_of_week: w.day_of_week,
+        start_slot_index: w.start_slot_index,
+        end_slot_index: w.end_slot_index,
+      })),
+      { day_of_week: dayVal, start_slot_index: start, end_slot_index: end },
+    ]
+    setWindowsSaving(true)
+    try {
+      const resp = await putTeacherTimeWindows(teacher.id, nextWindows)
+      setWindows(resp.windows ?? [])
+      setNewDay('__all__')
+      setNewStart('')
+      setNewEnd('')
+    } catch (e: any) {
+      setWindowsError(String(e?.message ?? 'Save failed'))
+    } finally {
+      setWindowsSaving(false)
+    }
+  }
+
+  async function handleRemoveWindow(windowId: string) {
+    if (!teacher) return
+    const nextWindows = windows
+      .filter((w) => w.id !== windowId)
+      .map((w) => ({
+        day_of_week: w.day_of_week,
+        start_slot_index: w.start_slot_index,
+        end_slot_index: w.end_slot_index,
+      }))
+    setWindowsSaving(true)
+    try {
+      const resp = await putTeacherTimeWindows(teacher.id, nextWindows)
+      setWindows(resp.windows ?? [])
+    } catch (e: any) {
+      setWindowsError(String(e?.message ?? 'Remove failed'))
+    } finally {
+      setWindowsSaving(false)
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn p-4"
@@ -122,7 +229,7 @@ export function TeacherEditModal({
       aria-modal="true"
     >
       <div
-        className="w-full max-w-[600px] bg-white/80 backdrop-blur-lg rounded-2xl shadow-2xl p-6 border border-white/40 animate-scaleIn"
+        className="w-full max-w-[600px] max-h-[90vh] overflow-y-auto bg-white/80 backdrop-blur-lg rounded-2xl shadow-2xl p-6 border border-white/40 animate-scaleIn"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4">
@@ -273,7 +380,111 @@ export function TeacherEditModal({
               </button>
             </div>
           </div>
+
+          {/* ── Availability Windows ──────────────────────────────────── */}
+          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-900">Availability Windows</div>
+            <div className="mt-1 text-xs text-slate-500">
+              Restrict this teacher to specific time slots. Leave empty to allow
+              any slot. You can define one window per day, or one all-days window.
+            </div>
+
+            {/* Existing windows */}
+            {windows.length === 0 ? (
+              <p className="mt-3 text-xs text-slate-400 italic">No windows set — teacher can be scheduled at any slot.</p>
+            ) : (
+              <div className="mt-3 space-y-1.5">
+                {windows
+                  .slice()
+                  .sort((a, b) => (a.day_of_week ?? -1) - (b.day_of_week ?? -1))
+                  .map((w) => (
+                    <div
+                      key={w.id}
+                      className="flex items-center justify-between gap-2 rounded-xl border bg-white px-3 py-2 text-xs"
+                    >
+                      <div className="font-medium text-slate-800">
+                        {w.day_of_week == null ? 'All days' : WEEKDAYS[w.day_of_week]}
+                        <span className="ml-2 font-normal text-slate-600">
+                          Slot {w.start_slot_index}
+                          {w.start_slot_index !== w.end_slot_index
+                            ? ` – ${w.end_slot_index}`
+                            : ''}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="text-rose-500 hover:text-rose-700 disabled:opacity-40 text-xs font-medium"
+                        disabled={windowsSaving}
+                        onClick={() => handleRemoveWindow(w.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            {/* Add new window */}
+            <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">
+              <div>
+                <label className="text-[11px] font-medium text-slate-600">Day</label>
+                <PremiumSelect
+                  ariaLabel="Day of week"
+                  className="mt-1 text-xs"
+                  value={newDay}
+                  onValueChange={setNewDay}
+                  options={[
+                    { value: '__all__', label: 'All days' },
+                    ...WEEKDAYS.map((d, i) => ({ value: String(i), label: d })),
+                  ]}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-medium text-slate-600">From (slot index)</label>
+                <PremiumSelect
+                  ariaLabel="Start slot"
+                  className="mt-1 text-xs"
+                  value={newStart || '__none__'}
+                  onValueChange={(v) => setNewStart(v === '__none__' ? '' : v)}
+                  options={[
+                    { value: '__none__', label: 'Select…' },
+                    ...allSlotIndices.map((i) => ({ value: String(i), label: `${i} — ${slotLabel(i)}` })),
+                  ]}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-medium text-slate-600">To (slot index)</label>
+                <PremiumSelect
+                  ariaLabel="End slot"
+                  className="mt-1 text-xs"
+                  value={newEnd || '__none__'}
+                  onValueChange={(v) => setNewEnd(v === '__none__' ? '' : v)}
+                  options={[
+                    { value: '__none__', label: 'Select…' },
+                    ...allSlotIndices
+                      .filter((i) => newStart === '' || i >= Number(newStart))
+                      .map((i) => ({ value: String(i), label: `${i} — ${slotLabel(i)}` })),
+                  ]}
+                />
+              </div>
+              <div className="flex items-end">
+                <button
+                  type="button"
+                  className="btn-primary w-full text-xs font-semibold disabled:opacity-50"
+                  disabled={windowsSaving || newStart === '' || newEnd === ''}
+                  onClick={handleAddWindow}
+                >
+                  {windowsSaving ? '…' : 'Add'}
+                </button>
+              </div>
+            </div>
+
+            {windowsError && (
+              <p className="mt-2 text-xs font-medium text-rose-600">{windowsError}</p>
+            )}
+          </div>
       </div>
     </div>
   )
 }
+

@@ -246,7 +246,7 @@ def _apply_fixed_entries(ctx: SolverContext) -> None:
 
 
 def _prune_teacher_slots(ctx: SolverContext) -> None:
-    """Build teacher_disallowed_slot_ids from locked slots and weekly off days."""
+    """Build teacher_disallowed_slot_ids from locked slots, weekly off days, and time windows."""
     for teacher_id, slot_id in ctx.locked_teacher_slots:
         ctx.teacher_disallowed_slot_ids[teacher_id].add(slot_id)
     for teacher_id, teacher in ctx.teacher_by_id.items():
@@ -255,6 +255,78 @@ def _prune_teacher_slots(ctx: SolverContext) -> None:
         off_day = int(teacher.weekly_off_day)
         for ts in ctx.slots_by_day.get(off_day, []):
             ctx.teacher_disallowed_slot_ids[teacher_id].add(ts.id)
+
+    # --- Teacher time-window enforcement -------------------------------------
+    # For every teacher that has time windows defined, collect the set of slot
+    # IDs that fall *inside* at least one window.  Any slot NOT in that set is
+    # blocked.  Windows with day_of_week=None apply to every active day.
+    for teacher_id, windows in ctx.teacher_windows_by_id.items():
+        if not windows:
+            continue
+
+        allowed_for_teacher: set = set()
+        for w in windows:
+            start_si = int(w.start_slot_index)
+            end_si = int(w.end_slot_index)
+            if w.day_of_week is not None:
+                days = [int(w.day_of_week)]
+            else:
+                # All active days observed by this tenant's time slots
+                days = list(ctx.slots_by_day.keys())
+
+            for day in days:
+                for si in range(start_si, end_si + 1):
+                    ts = ctx.slot_by_day_index.get((day, si))
+                    if ts is not None:
+                        allowed_for_teacher.add(ts.id)
+
+        # Block every slot NOT inside the teacher's windows
+        all_slot_ids: set = {ts.id for day_slots in ctx.slots_by_day.values() for ts in day_slots}
+        for slot_id in all_slot_ids - allowed_for_teacher:
+            ctx.teacher_disallowed_slot_ids[teacher_id].add(slot_id)
+
+
+def check_teacher_window_feasibility(ctx: SolverContext) -> list[str]:
+    """Return human-readable warnings for teacher–section pairs where the
+    intersection of teacher time windows and section time windows is empty.
+
+    Called *after* apply_pre_solve_locks() (and build_pruned_slots), so
+    teacher_disallowed_slot_ids is fully populated.  Returns an empty list
+    when everything is feasible.
+    """
+    warnings: list[str] = []
+    dallowed = ctx.teacher_disallowed_slot_ids
+
+    for section in ctx.sections:
+        sec_id = section.id
+        sec_allowed: set = ctx.allowed_slots_by_section.get(sec_id, set())
+        if not sec_allowed:
+            continue
+
+        # Iterate over every (section, subject) → teacher assignment
+        for (s_id, subj_id), teacher_id in ctx.assigned_teacher_by_section_subject.items():
+            if s_id != sec_id:
+                continue
+
+            # Only flag when the teacher actually has windows configured
+            if not ctx.teacher_windows_by_id.get(teacher_id):
+                continue
+
+            disallowed: set = dallowed.get(teacher_id, set())
+            effective_slots = sec_allowed - disallowed
+            if not effective_slots:
+                teacher = ctx.teacher_by_id.get(teacher_id)
+                subj = ctx.subject_by_id.get(subj_id)
+                t_code = teacher.code if teacher else str(teacher_id)
+                s_code = getattr(section, "code", str(sec_id))
+                sub_code = subj.code if subj else str(subj_id)
+                warnings.append(
+                    f"Teacher {t_code} has no valid slots for section {s_code} "
+                    f"subject {sub_code}: teacher availability window does not "
+                    f"overlap with section timetable window."
+                )
+
+    return warnings
 
 
 def _filter_locked_slot_indices(ctx: SolverContext) -> None:

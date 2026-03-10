@@ -24,6 +24,18 @@ export type TeacherPut = Pick<
   | 'is_active'
 >
 
+export type TeacherTimeWindow = {
+  id: string
+  teacher_id: string
+  /** null = applies to every working day */
+  day_of_week: number | null
+  start_slot_index: number
+  end_slot_index: number
+  created_at: string
+}
+
+export type TeacherTimeWindowCreate = Omit<TeacherTimeWindow, 'id' | 'teacher_id' | 'created_at'>
+
 export async function listTeachers(): Promise<Teacher[]> {
   return apiFetch<Teacher[]>('/api/teachers/')
 }
@@ -43,5 +55,30 @@ export async function updateTeacher(id: string, payload: TeacherPut): Promise<Te
   return apiFetch<Teacher>(`/api/teachers/${id}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
+  })
+}
+
+export async function getTeacherTimeWindows(
+  teacherId: string,
+): Promise<{ teacher_id: string; windows: TeacherTimeWindow[] }> {
+  return apiFetch(`/api/teachers/${teacherId}/time-windows`)
+}
+
+export async function putTeacherTimeWindows(
+  teacherId: string,
+  windows: TeacherTimeWindowCreate[],
+): Promise<{ teacher_id: string; windows: TeacherTimeWindow[] }> {
+  return apiFetch(`/api/teachers/${teacherId}/time-windows`, {
+    method: 'PUT',
+    body: JSON.stringify({ windows }),
+  })
+}
+
+export async function deleteTeacherTimeWindow(
+  teacherId: string,
+  windowId: string,
+): Promise<{ ok: true }> {
+  return apiFetch(`/api/teachers/${teacherId}/time-windows/${windowId}`, {
+    method: 'DELETE',
   })
 }

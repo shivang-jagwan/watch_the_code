@@ -283,7 +283,7 @@ def _create_theory_vars(
 def _create_combined_theory_vars(ctx: SolverContext) -> None:
     """Create shared BoolVars for combined THEORY groups."""
     model = ctx.model
-    for group_id, sec_ids in ctx.group_sections.items():
+    for group_i, (group_id, sec_ids) in enumerate(ctx.group_sections.items()):
         subj_id = ctx.group_subject.get(group_id)
         if subj_id is None:
             continue
@@ -328,10 +328,9 @@ def _create_combined_theory_vars(ctx: SolverContext) -> None:
         # before creating variables, removing the per-slot check from the loop.
         valid_combined = sorted(allowed - teacher_blocked)
 
-        subj_i = ctx.subject_idx.get(subj_id, subj_id)
         for slot_id in valid_combined:
             slot_i = ctx.slot_idx_map.get(slot_id, slot_id)
-            gv = model.NewBoolVar(f"cg_{subj_i}_{slot_i}")
+            gv = model.NewBoolVar(f"cg_{group_i}_{slot_i}")
             ctx.combined_x[(group_id, slot_id)] = gv
             ctx.combined_vars_by_gid[group_id].append(gv)
             d = ctx.slot_info.get(slot_id, (None, None))[0]

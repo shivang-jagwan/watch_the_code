@@ -184,3 +184,25 @@ def bootstrap_auth() -> None:
     with ENGINE.begin() as conn:
         _ensure_users_schema(conn)
         _seed_admin_if_configured(conn)
+        _ensure_incremental_columns(conn)
+
+
+def _ensure_incremental_columns(conn) -> None:
+    """Apply additive column migrations that are safe to run on every startup.
+
+    Each statement uses ``ADD COLUMN IF NOT EXISTS`` so re-running is harmless.
+    Add new columns here whenever a migration adds a nullable/defaulted column.
+    """
+    statements = [
+        # Migration 025 — special rooms
+        "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS is_special BOOLEAN NOT NULL DEFAULT FALSE;",
+        # Migration 035 — teacher time windows (table; no extra column needed here)
+        # Migration 036 — lunch break flag on time slots
+        "ALTER TABLE time_slots ADD COLUMN IF NOT EXISTS is_lunch_break BOOLEAN NOT NULL DEFAULT FALSE;",
+    ]
+    for s in statements:
+        try:
+            conn.execute(text(s))
+        except Exception:
+            # Table may not exist yet (fresh DB); skip silently.
+            pass

@@ -116,6 +116,13 @@ export function TeacherEditModal({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [open, onClose])
 
+  // Must be before any early return to satisfy Rules of Hooks
+  const allSlotIndices = React.useMemo(() => {
+    const seen = new Set<number>()
+    timeSlots.forEach((s) => seen.add(s.slot_index))
+    return Array.from(seen).sort((a, b) => a - b)
+  }, [timeSlots])
+
   if (!open || !teacher || !form) return null
 
   const idPrefix = `edit_teacher_${teacher.id}`
@@ -151,13 +158,6 @@ export function TeacherEditModal({
         : ''
     return ts.start_time ? `${fmt(ts.start_time)} – ${fmt(ts.end_time)}` : `Slot ${slotIndex}`
   }
-
-  // Unique slot indices across all days (sorted)
-  const allSlotIndices = React.useMemo(() => {
-    const seen = new Set<number>()
-    timeSlots.forEach((s) => seen.add(s.slot_index))
-    return Array.from(seen).sort((a, b) => a - b)
-  }, [timeSlots])
 
   async function handleAddWindow() {
     if (!teacher) return

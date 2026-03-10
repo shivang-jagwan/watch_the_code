@@ -124,8 +124,9 @@ export function PremiumSelect({
         id={id}
         aria-label={ariaLabel}
         className={cx(
-          // Looks like your select-premium, but works on a button trigger too
-          'select-premium inline-flex w-full min-w-0 items-center justify-between gap-2 text-left',
+          // Uses select-premium base styles; select-premium-btn strips the CSS
+          // background arrow since we render our own ChevronDownIcon in JSX.
+          'select-premium select-premium-btn inline-flex w-full min-w-0 items-center justify-between gap-2 text-left',
           disabled && 'opacity-80',
           className,
         )}

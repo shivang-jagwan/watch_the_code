@@ -73,6 +73,20 @@ body[data-modal-open='true'] .app-scroll-region {
   color: rgb(15 23 42); /* slate-900 */
 }
 
+/* Used when .select-premium is applied to a <button> (Radix Trigger) that
+   already renders its own ChevronDown icon — strips the CSS background arrow
+   and reduces right padding to avoid a double-arrow. */
+.select-premium-btn {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.90), rgba(255, 255, 255, 0.62));
+  background-size: 100% 100%;
+  background-position: 0 0;
+  background-repeat: no-repeat;
+  padding-right: 0.625rem;
+}
+.select-premium-btn:disabled {
+  background-image: linear-gradient(180deg, rgba(241, 245, 249, 0.92), rgba(241, 245, 249, 0.75));
+}
+
 /* Premium text inputs */
 .input-premium,
 .textarea-premium {

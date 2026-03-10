@@ -20,6 +20,7 @@ from models.track_subject import TrackSubject
 from models.academic_year import AcademicYear
 from models.fixed_timetable_entry import FixedTimetableEntry
 from models.special_allotment import SpecialAllotment
+from models.subject_allowed_room import SubjectAllowedRoom
 from models.user import User
 
 __all__ = [
@@ -43,7 +44,7 @@ __all__ = [
 	"TrackSubject",
 	"FixedTimetableEntry",
 	"SpecialAllotment",
-	"User",
+    "SubjectAllowedRoom",
 	"Tenant",
 ]
 

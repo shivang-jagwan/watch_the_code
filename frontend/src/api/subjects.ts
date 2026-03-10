@@ -63,3 +63,28 @@ export async function updateSubject(id: string, payload: SubjectPut): Promise<Su
     body: JSON.stringify(payload),
   })
 }
+
+// ---------------------------------------------------------------------------
+// Subject allowed-rooms API
+// ---------------------------------------------------------------------------
+
+export type SubjectAllowedRoomsResponse = {
+  subject_id: string
+  room_ids: string[]
+}
+
+export async function getSubjectAllowedRooms(subjectId: string): Promise<SubjectAllowedRoomsResponse> {
+  return apiFetch<SubjectAllowedRoomsResponse>(`/api/subjects/${subjectId}/allowed-rooms`)
+}
+
+export async function addSubjectAllowedRoom(subjectId: string, roomId: string): Promise<{ id: string }> {
+  return apiFetch<{ id: string }>(`/api/subjects/${subjectId}/allowed-rooms?room_id=${roomId}`, {
+    method: 'POST',
+  })
+}
+
+export async function removeSubjectAllowedRoom(subjectId: string, roomId: string): Promise<{ ok: true }> {
+  return apiFetch<{ ok: true }>(`/api/subjects/${subjectId}/allowed-rooms/${roomId}`, {
+    method: 'DELETE',
+  })
+}

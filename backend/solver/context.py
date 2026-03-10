@@ -134,6 +134,10 @@ class SolverContext:
     # Set of slot_ids marked as lunch/break periods; solver refuses to schedule here
     lunch_slot_ids: set[Any] = field(default_factory=set)
 
+    # subject_id → list[room_id]; populated by data_loader from subject_allowed_rooms table.
+    # Empty list means "no restriction — use default room pool".
+    allowed_rooms_by_subject: dict[Any, list[Any]] = field(default_factory=dict)
+
     # Elective blocks
     blocks_by_section: dict[Any, list[Any]] = field(default_factory=lambda: defaultdict(list))
     sections_by_block: dict[Any, list[Any]] = field(default_factory=lambda: defaultdict(list))

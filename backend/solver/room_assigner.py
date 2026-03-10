@@ -85,8 +85,12 @@ def assert_entry_invariants(ctx: SolverContext, entry: TimetableEntry) -> None:
             )
 
 
-def pick_room(ctx: SolverContext, slot_id: Any, subject_type: str, section_id: Any = None) -> tuple[Any | None, bool]:
+def pick_room(ctx: SolverContext, slot_id: Any, subject_type: str, section_id: Any = None, subject_id: Any = None) -> tuple[Any | None, bool]:
     """Pick a free room of the right type for *slot_id*. Returns (room_id, ok).
+
+    If *subject_id* is provided and the subject has configured allowed rooms,
+    the candidate list is restricted to those rooms only (subject-specific
+    room constraint).  Otherwise the normal section-fit or global pool is used.
 
     OPTIMIZATION (Task 5): room candidates are pre-sorted by data_loader
     _build_room_cache() into per-(section, type) best-fit lists.  This
@@ -94,18 +98,27 @@ def pick_room(ctx: SolverContext, slot_id: Any, subject_type: str, section_id: A
     sort from the old implementation, giving O(1) lookup + O(R) scan.
     """
     sid = _sid(slot_id)
-    tag = "LAB" if subject_type == "LAB" else "THEORY"
 
-    # Fast path: use pre-computed best-fit candidate list for this section.
-    candidates = (
-        ctx.room_candidates_by_section.get((section_id, tag))
-        if section_id is not None
+    # Subject-specific allowed rooms take priority over all other pools.
+    subject_allowed = (
+        ctx.allowed_rooms_by_subject.get(subject_id)
+        if subject_id is not None
         else None
     )
-
-    # Fallback: use the globally sorted base list (no section strength info).
-    if candidates is None:
-        candidates = ctx.lab_rooms_sorted if subject_type == "LAB" else ctx.theory_rooms_sorted
+    if subject_allowed:
+        # Resolve IDs → Room objects (those still active in ctx.room_by_id).
+        candidates = [ctx.room_by_id[rid] for rid in subject_allowed if rid in ctx.room_by_id]
+    else:
+        tag = "LAB" if subject_type == "LAB" else "THEORY"
+        # Fast path: use pre-computed best-fit candidate list for this section.
+        candidates = (
+            ctx.room_candidates_by_section.get((section_id, tag))
+            if section_id is not None
+            else None
+        )
+        # Fallback: use the globally sorted base list (no section strength info).
+        if candidates is None:
+            candidates = ctx.lab_rooms_sorted if subject_type == "LAB" else ctx.theory_rooms_sorted
 
     if not candidates:
         return None, False
@@ -151,13 +164,24 @@ def pick_lt_room(ctx: SolverContext, slot_id: Any) -> tuple[Any | None, bool]:
     return candidates[0].id, False
 
 
-def pick_room_for_block(ctx: SolverContext, slot_ids: list[str]) -> tuple[Any | None, bool]:
+def pick_room_for_block(ctx: SolverContext, slot_ids: list[str], subject_id: Any = None) -> tuple[Any | None, bool]:
     """Pick a single LAB room free across all *slot_ids* in a block.
+
+    If *subject_id* is provided and the subject has configured allowed rooms,
+    those rooms are used instead of the full lab pool.
 
     OPTIMIZATION (Task 5): uses ctx.lab_rooms_sorted (pre-sorted cap ASC)
     — no list construction or sorting per call.
     """
-    candidates = ctx.lab_rooms_sorted
+    subject_allowed = (
+        ctx.allowed_rooms_by_subject.get(subject_id)
+        if subject_id is not None
+        else None
+    )
+    if subject_allowed:
+        candidates = [ctx.room_by_id[rid] for rid in subject_allowed if rid in ctx.room_by_id]
+    else:
+        candidates = ctx.lab_rooms_sorted
     if not candidates:
         return None, False
 

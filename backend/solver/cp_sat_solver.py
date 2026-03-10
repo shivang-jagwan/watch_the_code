@@ -91,6 +91,33 @@ def solve_program_global(
     )
 
 
+def _check_subject_allowed_rooms(ctx: SolverContext) -> list[str]:
+    """Return warnings where subject allowed-rooms are misconfigured."""
+    warnings: list[str] = []
+    for subj_id, room_ids in ctx.allowed_rooms_by_subject.items():
+        subj = ctx.subject_by_id.get(subj_id)
+        if subj is None:
+            continue
+        subj_type = str(subj.subject_type).upper()
+        expected_type = "LAB" if subj_type == "LAB" else None  # THEORY allows any non-special room
+
+        valid_count = 0
+        for rid in room_ids:
+            room = ctx.room_by_id.get(rid)
+            if room is None:
+                continue
+            rt = str(room.room_type).upper()
+            if expected_type is None or rt == expected_type:
+                valid_count += 1
+
+        if valid_count == 0 and room_ids:
+            warnings.append(
+                f"Subject '{getattr(subj, 'code', subj_id)}' has {len(room_ids)} allowed room(s) "
+                f"but none match subject type '{subj_type}'. Solver will fall back to default pool."
+            )
+    return warnings
+
+
 def _solve_program(
     db: Session,
     *,
@@ -140,6 +167,15 @@ def _solve_program(
         logger.warning("[solver] teacher-window feasibility: %s", w)
     if tw_warnings:
         ctx.warnings.extend(tw_warnings)
+
+    # 3d. Validate subject allowed-room configurations.  Warn when a subject's
+    #     allowed rooms list exists but contains no rooms compatible with the
+    #     subject type (e.g. a LAB subject restricted to a CLASSROOM room).
+    sar_warnings = _check_subject_allowed_rooms(ctx)
+    for w in sar_warnings:
+        logger.warning("[solver] subject-allowed-rooms: %s", w)
+    if sar_warnings:
+        ctx.warnings.extend(sar_warnings)
 
     # 4. Create CP-SAT variables
     create_variables(ctx)

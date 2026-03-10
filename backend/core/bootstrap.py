@@ -214,6 +214,19 @@ def _ensure_incremental_columns(conn) -> None:
         "CREATE INDEX IF NOT EXISTS ix_teacher_time_windows_tenant ON teacher_time_windows (tenant_id);",
         # Migration 036 — lunch break flag on time slots
         "ALTER TABLE time_slots ADD COLUMN IF NOT EXISTS is_lunch_break BOOLEAN NOT NULL DEFAULT FALSE;",
+        # Migration 037 — subject-specific allowed rooms
+        """
+        CREATE TABLE IF NOT EXISTS subject_allowed_rooms (
+            id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id  UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            subject_id UUID        NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+            room_id    UUID        NOT NULL REFERENCES rooms(id)    ON DELETE CASCADE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_subject_allowed_rooms_tenant_subject_room ON subject_allowed_rooms (tenant_id, subject_id, room_id);",
+        "CREATE INDEX IF NOT EXISTS ix_subject_allowed_rooms_subject ON subject_allowed_rooms (subject_id);",
+        "CREATE INDEX IF NOT EXISTS ix_subject_allowed_rooms_tenant  ON subject_allowed_rooms (tenant_id);",
     ]
     for s in statements:
         try:

@@ -29,6 +29,7 @@ from models.section_elective_block import SectionElectiveBlock
 from models.section_subject import SectionSubject
 from models.section_time_window import SectionTimeWindow
 from models.subject import Subject
+from models.subject_allowed_room import SubjectAllowedRoom
 from models.teacher import Teacher
 from models.teacher_time_window import TeacherTimeWindow
 from models.teacher_subject_section import TeacherSubjectSection
@@ -112,6 +113,9 @@ def load_all(ctx: SolverContext) -> None:
     q_subjects = where_tenant(q_subjects, Subject, tenant_id)
     ctx.subjects = db.execute(q_subjects).scalars().all()
     ctx.subject_by_id = {s.id: s for s in ctx.subjects}
+
+    # --- Subject → allowed rooms (optional; table may not exist yet) ---------
+    _load_subject_allowed_rooms(ctx)
 
     # --- Teachers ------------------------------------------------------------
     q_teachers = where_tenant(select(Teacher).where(Teacher.is_active.is_(True)), Teacher, tenant_id)
@@ -219,6 +223,30 @@ def load_all(ctx: SolverContext) -> None:
     # --- Build room sort cache (OPTIMIZATION Task 5) -------------------------
     # Must come after rooms and sections are loaded.
     _build_room_cache(ctx)
+
+
+def _load_subject_allowed_rooms(ctx: SolverContext) -> None:
+    """Load subject_allowed_rooms into ctx.allowed_rooms_by_subject.
+
+    If the table does not exist yet (e.g. migration not applied), this is a
+    no-op so the solver continues working without the feature.
+    """
+    db = ctx.db
+    tenant_id = ctx.tenant_id
+
+    if not table_exists(db, "subject_allowed_rooms"):
+        return
+    if not ctx.subjects:
+        return
+
+    subject_ids = [s.id for s in ctx.subjects]
+    q = (
+        select(SubjectAllowedRoom.subject_id, SubjectAllowedRoom.room_id)
+        .where(SubjectAllowedRoom.subject_id.in_(subject_ids))
+    )
+    q = where_tenant(q, SubjectAllowedRoom, tenant_id)
+    for subj_id, room_id in db.execute(q).all():
+        ctx.allowed_rooms_by_subject.setdefault(subj_id, []).append(room_id)
 
 
 def _load_elective_blocks(ctx: SolverContext) -> None:

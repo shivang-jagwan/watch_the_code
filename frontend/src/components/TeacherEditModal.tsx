@@ -440,7 +440,7 @@ export function TeacherEditModal({
                 />
               </div>
               <div>
-                <label className="text-[11px] font-medium text-slate-600">From (slot index)</label>
+                <label className="text-[11px] font-medium text-slate-600">From</label>
                 <PremiumSelect
                   ariaLabel="Start slot"
                   className="mt-1 text-xs"
@@ -453,7 +453,7 @@ export function TeacherEditModal({
                 />
               </div>
               <div>
-                <label className="text-[11px] font-medium text-slate-600">To (slot index)</label>
+                <label className="text-[11px] font-medium text-slate-600">To</label>
                 <PremiumSelect
                   ariaLabel="End slot"
                   className="mt-1 text-xs"

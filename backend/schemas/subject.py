@@ -56,3 +56,33 @@ class SubjectOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SubjectAllowedRoomOut(BaseModel):
+    id: uuid.UUID
+    subject_id: uuid.UUID
+    room_id: uuid.UUID
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ListSubjectAllowedRoomsResponse(BaseModel):
+    subject_id: uuid.UUID
+    room_ids: list[uuid.UUID]
+
+
+class SubjectAllowedRoomOut(BaseModel):
+    id: uuid.UUID
+    subject_id: uuid.UUID
+    room_id: uuid.UUID
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ListSubjectAllowedRoomsResponse(BaseModel):
+    subject_id: uuid.UUID
+    room_ids: list[uuid.UUID]

@@ -1,5 +1,12 @@
 import React from 'react'
 import type { Subject, SubjectPut } from '../api/subjects'
+import {
+  getSubjectAllowedRooms,
+  addSubjectAllowedRoom,
+  removeSubjectAllowedRoom,
+} from '../api/subjects'
+import { listRooms } from '../api/rooms'
+import type { Room } from '../api/rooms'
 import { useModalScrollLock } from '../hooks/useModalScrollLock'
 import { PremiumSelect } from './PremiumSelect'
 
@@ -81,14 +88,28 @@ export function SubjectEditModal({ open, subject, loading, onClose, onSave }: Su
   const [form, setForm] = React.useState<FormState | null>(null)
   const [errors, setErrors] = React.useState<string[]>([])
 
+  // Allowed rooms
+  const [allRooms, setAllRooms] = React.useState<Room[]>([])
+  const [allowedRoomIds, setAllowedRoomIds] = React.useState<Set<string>>(new Set())
+  const [roomsSaving, setRoomsSaving] = React.useState(false)
+
   React.useEffect(() => {
     if (!open || !subject) {
       setForm(null)
       setErrors([])
+      setAllowedRoomIds(new Set())
       return
     }
     setForm(subjectToForm(subject))
     setErrors([])
+    // Load rooms + allowed rooms in parallel
+    Promise.all([
+      listRooms().catch(() => [] as Room[]),
+      getSubjectAllowedRooms(subject.id).catch(() => ({ subject_id: subject.id, room_ids: [] })),
+    ]).then(([rooms, sar]) => {
+      setAllRooms(rooms)
+      setAllowedRoomIds(new Set(sar.room_ids))
+    })
   }, [open, subject])
 
   React.useEffect(() => {
@@ -104,6 +125,24 @@ export function SubjectEditModal({ open, subject, loading, onClose, onSave }: Su
   const idPrefix = `edit_subject_${subject.id}`
   const normalized = normalizeForm(form)
   const subjectType = String(normalized.subject_type).toUpperCase()
+
+  async function handleToggleRoom(roomId: string) {
+    if (!subject || roomsSaving) return
+    setRoomsSaving(true)
+    try {
+      if (allowedRoomIds.has(roomId)) {
+        await removeSubjectAllowedRoom(subject.id, roomId)
+        setAllowedRoomIds((prev) => { const n = new Set(prev); n.delete(roomId); return n })
+      } else {
+        await addSubjectAllowedRoom(subject.id, roomId)
+        setAllowedRoomIds((prev) => new Set(prev).add(roomId))
+      }
+    } catch {
+      // ignore — room state will be out-of-sync but non-critical
+    } finally {
+      setRoomsSaving(false)
+    }
+  }
 
   async function handleSave() {
     if (!form) return
@@ -132,7 +171,7 @@ export function SubjectEditModal({ open, subject, loading, onClose, onSave }: Su
       aria-modal="true"
     >
       <div
-        className="w-full max-w-[600px] bg-white/80 backdrop-blur-lg rounded-2xl shadow-2xl p-6 border border-white/40 animate-scaleIn"
+        className="w-full max-w-[640px] max-h-[90vh] overflow-y-auto bg-white/80 backdrop-blur-lg rounded-2xl shadow-2xl p-6 border border-white/40 animate-scaleIn"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4">
@@ -274,6 +313,55 @@ export function SubjectEditModal({ open, subject, loading, onClose, onSave }: Su
                 </ul>
               </div>
             )}
+
+            {/* ── Allowed Rooms ─────────────────────────────────────────── */}
+            <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">Allowed Rooms</div>
+              <div className="mt-1 text-xs text-slate-500">
+                Optionally restrict this subject to specific rooms. Leave all unchecked to allow
+                any compatible room.
+              </div>
+              {allRooms.filter((r) => r.is_active).length === 0 ? (
+                <p className="mt-3 text-xs italic text-slate-400">No rooms configured.</p>
+              ) : (
+                <div className="mt-3 grid gap-1 sm:grid-cols-2">
+                  {allRooms
+                    .filter((r) => r.is_active)
+                    .map((r) => (
+                      <label
+                        key={r.id}
+                        className={
+                          'flex cursor-pointer select-none items-center gap-2 rounded-xl border px-3 py-2 text-xs transition-colors ' +
+                          (allowedRoomIds.has(r.id)
+                            ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300')
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-3.5 w-3.5 accent-emerald-600"
+                          checked={allowedRoomIds.has(r.id)}
+                          disabled={roomsSaving}
+                          onChange={() => handleToggleRoom(r.id)}
+                        />
+                        <span className="font-medium">{r.code}</span>
+                        <span className="text-slate-500">{r.room_type}</span>
+                        {r.is_special && (
+                          <span className="ml-auto rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                            Special
+                          </span>
+                        )}
+                      </label>
+                    ))}
+                </div>
+              )}
+              {allowedRoomIds.size > 0 && (
+                <p className="mt-2 text-xs text-emerald-700 font-medium">
+                  {allowedRoomIds.size} room{allowedRoomIds.size > 1 ? 's' : ''} selected — solver
+                  will only assign this subject to these rooms.
+                </p>
+              )}
+            </div>
 
             <div className="mt-1 flex items-center justify-end gap-2">
               <button

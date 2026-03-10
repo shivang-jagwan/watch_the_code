@@ -12,8 +12,17 @@ from api.tenant import get_by_id, where_tenant
 from core.db import get_db
 from models.academic_year import AcademicYear
 from models.program import Program
+from models.room import Room
 from models.subject import Subject
-from schemas.subject import SubjectCreate, SubjectOut, SubjectPut, SubjectUpdate
+from models.subject_allowed_room import SubjectAllowedRoom
+from schemas.subject import (
+    ListSubjectAllowedRoomsResponse,
+    SubjectAllowedRoomOut,
+    SubjectCreate,
+    SubjectOut,
+    SubjectPut,
+    SubjectUpdate,
+)
 
 
 router = APIRouter()
@@ -262,5 +271,82 @@ def delete_subject(
     if subject is None:
         raise HTTPException(status_code=404, detail="SUBJECT_NOT_FOUND")
     db.delete(subject)
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Subject → Allowed Rooms endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{subject_id}/allowed-rooms", response_model=ListSubjectAllowedRoomsResponse)
+def list_subject_allowed_rooms(
+    subject_id: uuid.UUID,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> ListSubjectAllowedRoomsResponse:
+    subject = get_by_id(db, Subject, subject_id, tenant_id)
+    if subject is None:
+        raise HTTPException(status_code=404, detail="SUBJECT_NOT_FOUND")
+
+    q = select(SubjectAllowedRoom).where(SubjectAllowedRoom.subject_id == subject_id)
+    q = where_tenant(q, SubjectAllowedRoom, tenant_id)
+    rows = db.execute(q).scalars().all()
+    return ListSubjectAllowedRoomsResponse(
+        subject_id=subject_id,
+        room_ids=[r.room_id for r in rows],
+    )
+
+
+@router.post("/{subject_id}/allowed-rooms", response_model=SubjectAllowedRoomOut, status_code=201)
+def add_subject_allowed_room(
+    subject_id: uuid.UUID,
+    room_id: uuid.UUID,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> SubjectAllowedRoomOut:
+    subject = get_by_id(db, Subject, subject_id, tenant_id)
+    if subject is None:
+        raise HTTPException(status_code=404, detail="SUBJECT_NOT_FOUND")
+    room = get_by_id(db, Room, room_id, tenant_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="ROOM_NOT_FOUND")
+
+    row = SubjectAllowedRoom(
+        tenant_id=tenant_id,
+        subject_id=subject_id,
+        room_id=room_id,
+    )
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="ALREADY_EXISTS")
+    db.refresh(row)
+    return SubjectAllowedRoomOut.model_validate(row)
+
+
+@router.delete("/{subject_id}/allowed-rooms/{room_id}")
+def remove_subject_allowed_room(
+    subject_id: uuid.UUID,
+    room_id: uuid.UUID,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> dict:
+    q = (
+        select(SubjectAllowedRoom)
+        .where(SubjectAllowedRoom.subject_id == subject_id)
+        .where(SubjectAllowedRoom.room_id == room_id)
+    )
+    q = where_tenant(q, SubjectAllowedRoom, tenant_id)
+    row = db.execute(q).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="NOT_FOUND")
+    db.delete(row)
     db.commit()
     return {"ok": True}

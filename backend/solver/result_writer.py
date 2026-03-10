@@ -430,7 +430,7 @@ def _write_theory_entries(ctx: SolverContext, solver: cp_model.CpSolver) -> None
         if fixed_room is not None:
             room_id, ok_room = fixed_room, True
         else:
-            room_id, ok_room = pick_room(ctx, slot_id, str(subj.subject_type), section_id=sec_id)
+            room_id, ok_room = pick_room(ctx, slot_id, str(subj.subject_type), section_id=sec_id, subject_id=subj_id)
         if room_id is None:
             continue
 
@@ -661,7 +661,7 @@ def _write_lab_entries(ctx: SolverContext, solver: cp_model.CpSolver) -> None:
         if fixed_rooms:
             room_id, ok_room = fixed_rooms[0], True
         else:
-            room_id, ok_room = pick_room_for_block(ctx, slot_ids)
+            room_id, ok_room = pick_room_for_block(ctx, slot_ids, subject_id=subj_id)
         if room_id is None:
             continue
 

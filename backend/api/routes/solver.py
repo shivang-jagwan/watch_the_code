@@ -67,6 +67,9 @@ from schemas.solver import (
     SpecialAllotmentOut,
     ListSpecialAllotmentsResponse,
     UpsertSpecialAllotmentRequest,
+    ValidateTimetableRequest,
+    ValidateTimetableResponse,
+    ValidationIssue,
 )
 from schemas.subject import SubjectOut
 from services.solver_validation import validate_prereqs
@@ -1241,6 +1244,247 @@ def generate_timetable(
         raise
     except SAOperationalError as exc:
         db.rollback()
+        if is_transient_db_connectivity_error(exc):
+            raise DatabaseUnavailableError("Database temporarily unavailable") from exc
+        raise
+
+
+@router.post("/validate", response_model=ValidateTimetableResponse)
+def validate_timetable(
+    payload: ValidateTimetableRequest,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+):
+    """Validate solver feasibility without running the solver.
+
+    Runs prerequisite checks (missing config, broken references, time windows)
+    plus capacity analysis (teacher overload, room shortage, section slot deficit,
+    combined-group domain collapse, subject-specific room conflicts).
+
+    Returns structured errors/warnings/capacity_issues in under 1 second for
+    typical datasets.  Does NOT create a persistent run or modify the database.
+    """
+    try:
+        validate_db_connection(db)
+
+        # ── 1. Resolve program ────────────────────────────────────────────
+        q_program = where_tenant(
+            select(Program).where(Program.code == payload.program_code), Program, tenant_id
+        )
+        program = db.execute(q_program).scalar_one_or_none()
+        if program is None:
+            return ValidateTimetableResponse(
+                status="INVALID",
+                errors=[
+                    SolverConflict(
+                        conflict_type="PROGRAM_NOT_FOUND",
+                        message=f"Unknown program_code '{payload.program_code}'.",
+                    )
+                ],
+            )
+
+        # ── 2. Load sections ──────────────────────────────────────────────
+        academic_year_id = None
+        q_sections = (
+            select(Section)
+            .where(Section.program_id == program.id)
+            .where(Section.is_active.is_(True))
+        )
+        if payload.academic_year_number is not None:
+            q_ay = where_tenant(
+                select(AcademicYear)
+                .where(AcademicYear.program_id == program.id)
+                .where(AcademicYear.year_number == payload.academic_year_number),
+                AcademicYear,
+                tenant_id,
+            )
+            ay = db.execute(q_ay).scalar_one_or_none()
+            if ay is not None:
+                academic_year_id = ay.id
+                q_sections = q_sections.where(Section.academic_year_id == academic_year_id)
+
+        q_sections = where_tenant(q_sections, Section, tenant_id).order_by(Section.code)
+        sections = db.execute(q_sections).scalars().all()
+
+        if not sections:
+            return ValidateTimetableResponse(
+                status="INVALID",
+                errors=[
+                    SolverConflict(
+                        conflict_type="NO_ACTIVE_SECTIONS",
+                        message=f"No active sections found for program '{payload.program_code}'.",
+                    )
+                ],
+            )
+
+        # ── 3. Prerequisite validation (read-only, transient run object) ──
+        # validate_prereqs needs a run object only to query SectionBreak
+        # (which returns no rows for a fresh UUID) and to read tenant_id.
+        class _TransientRun:
+            def __init__(self, tid: uuid.UUID | None) -> None:
+                self.id = uuid.uuid4()
+                self.tenant_id = tid
+
+        transient_run = _TransientRun(tenant_id)
+
+        prereq_conflicts = validate_prereqs(
+            db,
+            run=transient_run,
+            program_id=program.id,
+            academic_year_id=academic_year_id,
+            sections=sections,
+        )
+        errors = [c for c in prereq_conflicts if str(c.severity).upper() == "ERROR"]
+        warn_from_prereqs = [c for c in prereq_conflicts if str(c.severity).upper() == "WARN"]
+
+        # ── 4. Capacity analysis ──────────────────────────────────────────
+        cap_data = build_capacity_data(
+            db,
+            program_id=program.id,
+            academic_year_id=academic_year_id,
+            sections=list(sections),
+            tenant_id=tenant_id,
+        )
+        cap_result = analyze_capacity(cap_data)
+
+        # ── 5. Convert capacity issues to ValidationIssue objects ─────────
+        capacity_issues: list[ValidationIssue] = []
+        for issue in cap_result.get("issues", []):
+            t = str(issue.get("type", ""))
+            rt = str(issue.get("resource_type", ""))
+            req = int(issue.get("required_slots", 0) or 0)
+            avail = int(issue.get("available_slots", 0) or 0)
+            short = int(issue.get("shortage", 0) or 0)
+            resource = str(issue.get("resource", "") or "")
+
+            if rt == "TEACHER":
+                teacher_name = resource.replace("Teacher ", "")
+                vi = ValidationIssue(
+                    type=t,
+                    resource=resource,
+                    resource_type=rt,
+                    teacher_id=issue.get("teacher_id"),
+                    teacher=teacher_name,
+                    required=req,
+                    capacity=avail,
+                    shortage=short,
+                    contributors=issue.get("contributors", []),
+                    suggestion=(
+                        f"Increase max_per_day or max_per_week for {teacher_name} "
+                        f"by at least {short} session(s)."
+                    ),
+                )
+            elif rt == "ROOM_TYPE":
+                room_type_name = resource.replace("RoomType ", "")
+                vi = ValidationIssue(
+                    type=t,
+                    resource=resource,
+                    resource_type=rt,
+                    required=req,
+                    capacity=avail,
+                    shortage=short,
+                    suggestion=(
+                        f"Add more {room_type_name} rooms or reduce scheduled sessions "
+                        f"by {short} slot(s)."
+                    ),
+                )
+            elif rt == "SECTION":
+                section_name = resource.replace("Section ", "")
+                vi = ValidationIssue(
+                    type=t,
+                    resource=resource,
+                    resource_type=rt,
+                    section_id=issue.get("section_id"),
+                    section=section_name,
+                    required=req,
+                    capacity=avail,
+                    shortage=short,
+                    suggestion=(
+                        f"Expand the time window for section {section_name} "
+                        f"or reduce sessions by {short} slot(s)."
+                    ),
+                )
+            elif rt == "COMBINED_GROUP":
+                vi = ValidationIssue(
+                    type=t,
+                    resource=resource,
+                    resource_type=rt,
+                    subject_id=issue.get("subject_id"),
+                    required=req,
+                    capacity=avail,
+                    shortage=short,
+                    suggestion=(
+                        "Ensure the intersection of the combined sections' time windows "
+                        f"has at least {req} free slots (currently {avail})."
+                    ),
+                )
+            elif rt == "SUBJECT_ROOM":
+                subj_name = resource.replace("Subject ", "")
+                vi = ValidationIssue(
+                    type=t,
+                    resource=resource,
+                    resource_type=rt,
+                    subject_id=issue.get("subject_id"),
+                    subject=subj_name,
+                    required=req,
+                    capacity=avail,
+                    shortage=short,
+                    suggestion=(
+                        f"Add more allowed rooms for {subj_name} or remove the room "
+                        "restriction to use the default pool."
+                    ),
+                )
+            else:
+                vi = ValidationIssue(
+                    type=t,
+                    resource=resource,
+                    resource_type=rt,
+                    required=req,
+                    capacity=avail,
+                    shortage=short,
+                )
+            capacity_issues.append(vi)
+
+        # ── 6. Build response ─────────────────────────────────────────────
+        def _to_conflict(c) -> SolverConflict:
+            return SolverConflict(
+                severity=c.severity,
+                conflict_type=c.conflict_type,
+                message=c.message,
+                section_id=c.section_id,
+                teacher_id=c.teacher_id,
+                subject_id=c.subject_id,
+                room_id=c.room_id,
+                slot_id=c.slot_id,
+                details=(c.metadata or {}),
+                metadata=(c.metadata or {}),
+            )
+
+        error_conflicts = [_to_conflict(c) for c in errors]
+        warning_conflicts = [_to_conflict(c) for c in warn_from_prereqs]
+
+        has_block = bool(error_conflicts) or bool(capacity_issues)
+        has_warn = bool(warning_conflicts)
+
+        if has_block:
+            status = "INVALID"
+        elif has_warn:
+            status = "WARNINGS"
+        else:
+            status = "VALID"
+
+        return ValidateTimetableResponse(
+            status=status,
+            errors=error_conflicts,
+            warnings=warning_conflicts,
+            capacity_issues=capacity_issues,
+            summary=cap_result.get("summary", {}),
+        )
+
+    except DatabaseUnavailableError:
+        raise
+    except SAOperationalError as exc:
         if is_transient_db_connectivity_error(exc):
             raise DatabaseUnavailableError("Database temporarily unavailable") from exc
         raise

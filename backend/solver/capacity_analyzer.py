@@ -27,6 +27,7 @@ from models import (
 
 from models.combined_subject_group import CombinedSubjectGroup
 from models.combined_subject_section import CombinedSubjectSection
+from models.subject_allowed_room import SubjectAllowedRoom
 
 
 def _slots_for_subject(subj: Any, sessions_per_week: int) -> int:
@@ -145,12 +146,24 @@ def build_capacity_data(
             filtered_group_sections[gid] = relevant
             filtered_group_subject[gid] = group_subject.get(gid)
 
+    # Subject-specific allowed rooms (optional table — graceful no-op if missing)
+    allowed_rooms_by_subject: dict[Any, list[Any]] = defaultdict(list)
+    if table_exists(db, "subject_allowed_rooms"):
+        q_sar = where_tenant(
+            select(SubjectAllowedRoom.subject_id, SubjectAllowedRoom.room_id),
+            SubjectAllowedRoom,
+            tenant_id,
+        )
+        for subj_id, room_id in db.execute(q_sar).all():
+            allowed_rooms_by_subject[subj_id].append(room_id)
+
     return {
         "sections": sections,
         "subjects_by_id": subject_by_id,
         "teachers_by_id": teacher_by_id,
         "assigned_teacher_by_section_subject": assigned_teacher_by_section_subject,
         "rooms_by_type": rooms_by_type,
+        "rooms": rooms,
         "slots": slots,
         "slot_by_day_index": slot_by_day_index,
         "slot_info": slot_info,
@@ -161,6 +174,7 @@ def build_capacity_data(
         "group_subject": filtered_group_subject,
         "active_days": active_days,
         "mapped_subject_ids_by_section": mapped_subject_ids_by_section,
+        "allowed_rooms_by_subject": dict(allowed_rooms_by_subject),
     }
 
 
@@ -170,6 +184,9 @@ def analyze_capacity(data: dict[str, Any], debug: bool = False) -> dict[str, Any
     subject_by_id: dict[Any, Any] = dict(data.get("subjects_by_id") or {})
     teacher_by_id: dict[Any, Any] = dict(data.get("teachers_by_id") or {})
     rooms_by_type = data.get("rooms_by_type") or {}
+    rooms_all: list[Any] = list(data.get("rooms") or [])
+    room_by_id: dict[Any, Any] = {r.id: r for r in rooms_all}
+    allowed_rooms_by_subject: dict[Any, list[Any]] = dict(data.get("allowed_rooms_by_subject") or {})
     slot_info: dict[Any, tuple[int, int]] = dict(data.get("slot_info") or {})
     slot_by_day_index: dict[tuple[int, int], Any] = dict(data.get("slot_by_day_index") or {})
     active_days: list[int] = list(data.get("active_days") or [])
@@ -414,6 +431,59 @@ def analyze_capacity(data: dict[str, Any], debug: bool = False) -> dict[str, Any
                     "required_slots": int(spw),
                     "available_slots": int(domain_size),
                     "shortage": int(spw) - int(domain_size),
+                }
+            )
+
+    # Subject-specific room capacity (if allowed rooms are configured)
+    section_id_set = set(s.id for s in sections)
+    total_slots_per_week = len(data.get("slots") or [])
+    for subj_id, allowed_room_id_list in sorted(allowed_rooms_by_subject.items(), key=lambda kv: str(kv[0])):
+        if not allowed_room_id_list:
+            continue
+        subj = subject_by_id.get(subj_id)
+        if subj is None:
+            continue
+        spw = int(getattr(subj, "sessions_per_week", 0) or 0)
+        if spw <= 0:
+            continue
+        slots_per_session = _slots_for_subject(subj, 1)  # lab block multiplier
+
+        # Determine total sessions required:
+        # - Each independent section with this subject = spw sessions
+        # - Each combined group counts once (shared class)
+        combined_gids_for_subj = [gid for gid, g_subj in group_subject.items() if g_subj == subj_id]
+        sections_in_combined: set[Any] = set()
+        combined_count = 0
+        for gid in combined_gids_for_subj:
+            relevant_secs = [sid for sid in group_sections.get(gid, []) if sid in section_id_set]
+            if len(relevant_secs) >= 2:
+                sections_in_combined.update(relevant_secs)
+                combined_count += 1
+
+        sections_with_subj = [
+            sec_id for sec_id, subj_ids in mapped_subject_ids_by_section.items()
+            if subj_id in (subj_ids or []) and sec_id in section_id_set
+        ]
+        individual_count = len([sid for sid in sections_with_subj if sid not in sections_in_combined])
+        total_sessions = (combined_count + individual_count) * spw
+        total_slots_needed = total_sessions * slots_per_session
+
+        # Allowed rooms capacity
+        valid_room_ids = [rid for rid in allowed_room_id_list if room_by_id.get(rid) is not None]
+        allowed_room_capacity = len(valid_room_ids) * int(total_slots_per_week)
+
+        if total_slots_needed > allowed_room_capacity:
+            issues.append(
+                {
+                    "type": "SUBJECT_ROOM_RESTRICTION_CONFLICT",
+                    "resource": f"Subject {getattr(subj, 'code', subj_id)}",
+                    "resource_type": "SUBJECT_ROOM",
+                    "subject_id": str(subj_id),
+                    "subject_code": getattr(subj, "code", None),
+                    "allowed_rooms": int(len(valid_room_ids)),
+                    "required_slots": int(total_slots_needed),
+                    "available_slots": int(allowed_room_capacity),
+                    "shortage": int(total_slots_needed) - int(allowed_room_capacity),
                 }
             )
 

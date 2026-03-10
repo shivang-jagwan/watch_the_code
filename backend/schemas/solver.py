@@ -264,3 +264,50 @@ class ListEligibleTeachersResponse(BaseModel):
     subject_id: uuid.UUID
     teachers: list[EligibleTeacherOut] = Field(default_factory=list)
 
+
+# ── Timetable Validation ────────────────────────────────────────────────────
+
+
+class ValidateTimetableRequest(BaseModel):
+    """Request body for POST /api/solver/validate."""
+
+    program_code: str = Field(min_length=1)
+    academic_year_number: int | None = None  # None = all years (program-wide)
+
+
+class ValidationIssue(BaseModel):
+    """One capacity / feasibility issue returned by the validate endpoint."""
+
+    type: str
+    resource: str | None = None
+    resource_type: str | None = None
+    # Entity identifiers for drill-down
+    teacher_id: str | None = None
+    teacher: str | None = None
+    section_id: str | None = None
+    section: str | None = None
+    subject_id: str | None = None
+    subject: str | None = None
+    # Numeric analysis
+    required: int | None = None
+    capacity: int | None = None
+    shortage: int | None = None
+    # Optional contributor breakdown (e.g. which subjects load a teacher)
+    contributors: list[dict[str, Any]] = Field(default_factory=list)
+    # Human-readable suggested fix
+    suggestion: str | None = None
+
+
+class ValidateTimetableResponse(BaseModel):
+    """Response from POST /api/solver/validate."""
+
+    status: Literal["VALID", "WARNINGS", "INVALID"]
+    # Structural / prerequisite errors that block solving
+    errors: list[SolverConflict] = Field(default_factory=list)
+    # Non-blocking warnings
+    warnings: list[SolverConflict] = Field(default_factory=list)
+    # Capacity / feasibility issues (teacher overload, room shortage, etc.)
+    capacity_issues: list[ValidationIssue] = Field(default_factory=list)
+    # Raw capacity summary numbers for debugging
+    summary: dict[str, Any] = Field(default_factory=dict)
+

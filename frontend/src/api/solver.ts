@@ -199,6 +199,43 @@ export async function listRunConflicts(runId: string): Promise<SolverConflict[]>
   return data.conflicts
 }
 
+// ── Timetable Validation ──────────────────────────────────────────────────
+
+export type ValidationIssue = {
+  type: string
+  resource?: string | null
+  resource_type?: string | null
+  teacher_id?: string | null
+  teacher?: string | null
+  section_id?: string | null
+  section?: string | null
+  subject_id?: string | null
+  subject?: string | null
+  required?: number | null
+  capacity?: number | null
+  shortage?: number | null
+  contributors?: Record<string, any>[]
+  suggestion?: string | null
+}
+
+export type ValidateTimetableResponse = {
+  status: 'VALID' | 'WARNINGS' | 'INVALID'
+  errors: SolverConflict[]
+  warnings: SolverConflict[]
+  capacity_issues: ValidationIssue[]
+  summary: Record<string, any>
+}
+
+export async function validateTimetable(payload: {
+  program_code: string
+  academic_year_number?: number | null
+}): Promise<ValidateTimetableResponse> {
+  return apiFetch<ValidateTimetableResponse>('/api/solver/validate', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function listRunEntries(
   runId: string,
   sectionCode?: string,

@@ -6,9 +6,12 @@ import {
   listTimeSlots,
   solveTimetableGlobal,
   pollRunUntilDone,
+  validateTimetable,
   type SolverConflict,
   type SolveTimetableResponse,
   type RunDetail,
+  type ValidateTimetableResponse,
+  type ValidationIssue,
 } from '../api/solver'
 import { useLayoutContext } from '../components/Layout'
 
@@ -46,6 +49,7 @@ export function GenerateTimetable() {
 
   const [lastRun, setLastRun] = React.useState<SolveTimetableResponse | null>(null)
   const [lastValidationConflicts, setLastValidationConflicts] = React.useState<SolverConflict[]>([])
+  const [lastValidation, setLastValidation] = React.useState<ValidateTimetableResponse | null>(null)
   const [pollStatus, setPollStatus] = React.useState<string | null>(null)
 
   function showToast(message: string, ms = 2500) {
@@ -81,19 +85,20 @@ export function GenerateTimetable() {
     }
     setLoading(true)
     setLastValidationConflicts([])
+    setLastValidation(null)
     setLastRun(null)
     try {
-      const s = seed.trim() === '' ? null : Number(seed)
-      const res = await generateTimetableGlobal({
-        program_code: pc,
-        seed: Number.isFinite(s as any) ? s : null,
-      })
-      if (res.status === 'READY_FOR_SOLVE') {
-        showToast('Validation passed. Ready to solve.')
+      const res = await validateTimetable({ program_code: pc })
+      setLastValidation(res)
+      setLastValidationConflicts([...res.errors, ...res.warnings])
+      const issueCount = res.errors.length + res.capacity_issues.length
+      if (res.status === 'VALID') {
+        showToast('Validation passed — ready to solve.')
+      } else if (res.status === 'WARNINGS') {
+        showToast(`Validation passed with ${res.warnings.length} warning(s).`)
       } else {
-        showToast('Validation failed.')
+        showToast(`Validation failed: ${issueCount} issue(s) found.`, 4000)
       }
-      setLastValidationConflicts(res.conflicts)
     } catch (e: any) {
       showToast(`Validate failed: ${String(e?.message ?? e)}`, 3500)
     } finally {
@@ -496,7 +501,9 @@ export function GenerateTimetable() {
               </div>
             ) : null}
 
-            {lastValidationConflicts.length > 0 ? (
+            {lastValidation ? (
+              <ValidationPanel result={lastValidation} />
+            ) : lastValidationConflicts.length > 0 ? (
               <div className="rounded-2xl border bg-amber-50 p-4">
                 <div className="text-sm font-semibold text-slate-900">Validation conflicts</div>
                 <div className="mt-2 space-y-2">
@@ -536,6 +543,168 @@ export function GenerateTimetable() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Validation Results Panel ─────────────────────────────────────────────────────
+
+const RESOURCE_TYPE_LABELS: Record<string, string> = {
+  TEACHER: 'Teacher Overload',
+  ROOM_TYPE: 'Room Shortage',
+  SECTION: 'Section Slot Deficit',
+  COMBINED_GROUP: 'Combined Group Domain Collapse',
+  SUBJECT_ROOM: 'Subject Room Restriction Conflict',
+}
+
+function ValidationPanel({ result }: { result: ValidateTimetableResponse }) {
+  const { status, errors, warnings, capacity_issues } = result
+  const isValid = status === 'VALID'
+  const isWarn = status === 'WARNINGS'
+
+  const borderCls = isValid
+    ? 'border-emerald-200'
+    : isWarn
+      ? 'border-amber-200'
+      : 'border-rose-200'
+  const bgCls = isValid ? 'bg-emerald-50' : isWarn ? 'bg-amber-50' : 'bg-rose-50'
+  const badgeCls = isValid
+    ? 'bg-emerald-100 text-emerald-700'
+    : isWarn
+      ? 'bg-amber-100 text-amber-700'
+      : 'bg-rose-100 text-rose-700'
+
+  return (
+    <div className={`rounded-2xl border p-4 ${borderCls} ${bgCls}`}>
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-semibold text-slate-900">Validation Result</div>
+        <span className={`rounded-full px-3 py-0.5 text-xs font-semibold ${badgeCls}`}>
+          {isValid ? '✓ VALID' : isWarn ? '⚠ WARNINGS' : '✕ INVALID'}
+        </span>
+      </div>
+
+      {/* Prerequisite errors */}
+      {errors.length > 0 ? (
+        <div className="mt-3">
+          <div className="mb-2 text-xs font-semibold text-rose-700">
+            Configuration Errors ({errors.length})
+          </div>
+          <div className="space-y-2">
+            {errors.slice(0, 12).map((c, i) => (
+              <div key={i} className="rounded-xl border bg-white p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="text-sm font-semibold text-slate-900">
+                    {prettyDiagType(c.conflict_type)}
+                  </div>
+                  <span className="shrink-0 rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
+                    ERROR
+                  </span>
+                </div>
+                <div className="mt-1 text-sm text-slate-700">{c.message}</div>
+                {c.metadata && Object.keys(c.metadata).length > 0 ? (
+                  <div className="mt-2 text-xs text-slate-500">
+                    {Object.entries(c.metadata)
+                      .slice(0, 4)
+                      .map(([k, v]) => (
+                        <span key={k} className="mr-3">
+                          {k}: {String(v)}
+                        </span>
+                      ))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+            {errors.length > 12 ? (
+              <div className="text-xs text-slate-500">Showing first 12 errors.</div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Capacity issues */}
+      {capacity_issues.length > 0 ? (
+        <div className="mt-3">
+          <div className="mb-2 text-xs font-semibold text-rose-700">
+            Capacity Issues ({capacity_issues.length})
+          </div>
+          <div className="overflow-x-auto rounded-xl border bg-white">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-slate-50 text-left text-xs text-slate-500">
+                  <th className="px-3 py-2">Issue Type</th>
+                  <th className="px-3 py-2">Affected</th>
+                  <th className="px-3 py-2 text-right">Required</th>
+                  <th className="px-3 py-2 text-right">Capacity</th>
+                  <th className="px-3 py-2 text-right">Shortage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {capacity_issues.map((issue, i) => (
+                  <tr key={i} className="border-b last:border-0">
+                    <td className="px-3 py-2 font-medium text-slate-900">
+                      {RESOURCE_TYPE_LABELS[issue.resource_type ?? ''] ?? prettyDiagType(issue.type)}
+                    </td>
+                    <td className="px-3 py-2 text-slate-700">{issue.resource ?? '—'}</td>
+                    <td className="px-3 py-2 text-right text-slate-700">{issue.required ?? '—'}</td>
+                    <td className="px-3 py-2 text-right text-slate-700">{issue.capacity ?? '—'}</td>
+                    <td className="px-3 py-2 text-right font-semibold text-rose-600">
+                      &minus;{issue.shortage ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {/* Suggestions */}
+          {capacity_issues.some((i) => i.suggestion) ? (
+            <div className="mt-3 space-y-1">
+              {capacity_issues
+                .filter((i) => i.suggestion)
+                .map((issue, i) => (
+                  <div key={i} className="text-xs text-slate-600">
+                    <span className="font-medium">{issue.resource ?? prettyDiagType(issue.type)}:</span>{' '}
+                    {issue.suggestion}
+                  </div>
+                ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* Warnings */}
+      {warnings.length > 0 ? (
+        <div className="mt-3">
+          <div className="mb-2 text-xs font-semibold text-amber-700">
+            Warnings ({warnings.length})
+          </div>
+          <div className="space-y-2">
+            {warnings.slice(0, 10).map((c, i) => (
+              <div key={i} className="rounded-xl border bg-white p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="text-sm font-semibold text-slate-900">
+                    {prettyDiagType(c.conflict_type)}
+                  </div>
+                  <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                    WARN
+                  </span>
+                </div>
+                <div className="mt-1 text-sm text-slate-700">{c.message}</div>
+              </div>
+            ))}
+            {warnings.length > 10 ? (
+              <div className="text-xs text-slate-500">Showing first 10 warnings.</div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Valid feedback */}
+      {isValid ? (
+        <div className="mt-3 text-sm text-emerald-700">
+          All checks passed. You can safely run the solver.
+        </div>
+      ) : null}
     </div>
   )
 }

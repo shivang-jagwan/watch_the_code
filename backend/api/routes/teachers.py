@@ -196,6 +196,10 @@ def get_teacher_time_windows(
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ) -> ListTeacherTimeWindowsResponse:
+    from core.db import table_exists
+    if not table_exists(db, "teacher_time_windows"):
+        return ListTeacherTimeWindowsResponse(teacher_id=teacher_id, windows=[])
+
     teacher = get_by_id(db, Teacher, teacher_id, tenant_id)
     if teacher is None:
         raise HTTPException(status_code=404, detail="TEACHER_NOT_FOUND")

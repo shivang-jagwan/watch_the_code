@@ -188,15 +188,30 @@ def bootstrap_auth() -> None:
 
 
 def _ensure_incremental_columns(conn) -> None:
-    """Apply additive column migrations that are safe to run on every startup.
+    """Apply additive schema migrations that are safe to run on every startup.
 
-    Each statement uses ``ADD COLUMN IF NOT EXISTS`` so re-running is harmless.
-    Add new columns here whenever a migration adds a nullable/defaulted column.
+    Statements use IF NOT EXISTS / ADD COLUMN IF NOT EXISTS so re-running is
+    harmless.  Add entries here for any migration that only adds tables or
+    nullable/defaulted columns.
     """
     statements = [
         # Migration 025 — special rooms
         "ALTER TABLE rooms ADD COLUMN IF NOT EXISTS is_special BOOLEAN NOT NULL DEFAULT FALSE;",
-        # Migration 035 — teacher time windows (table; no extra column needed here)
+        # Migration 035 — teacher time windows
+        """
+        CREATE TABLE IF NOT EXISTS teacher_time_windows (
+            id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id        UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            teacher_id       UUID        NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+            day_of_week      INTEGER     NULL,
+            start_slot_index INTEGER     NOT NULL,
+            end_slot_index   INTEGER     NOT NULL,
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_teacher_windows_tenant_teacher_null_day ON teacher_time_windows (tenant_id, teacher_id) WHERE day_of_week IS NULL;",
+        "CREATE INDEX IF NOT EXISTS ix_teacher_time_windows_teacher ON teacher_time_windows (teacher_id);",
+        "CREATE INDEX IF NOT EXISTS ix_teacher_time_windows_tenant ON teacher_time_windows (tenant_id);",
         # Migration 036 — lunch break flag on time slots
         "ALTER TABLE time_slots ADD COLUMN IF NOT EXISTS is_lunch_break BOOLEAN NOT NULL DEFAULT FALSE;",
     ]

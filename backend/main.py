@@ -167,8 +167,6 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup_bootstrap() -> None:
         # Best-effort: don't block app boot if DB is temporarily down.
-        if settings.environment.lower() != "production":
-            return
         try:
             from core.bootstrap import bootstrap_auth
 

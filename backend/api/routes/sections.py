@@ -170,6 +170,7 @@ def create_section(
         strength=payload.strength,
         track=track,
         is_active=payload.is_active,
+        max_daily_slots=payload.max_daily_slots,
     )
     db.add(section)
     try:

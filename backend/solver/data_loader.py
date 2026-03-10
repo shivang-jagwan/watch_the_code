@@ -11,20 +11,17 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from sqlalchemy import literal, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.tenant import where_tenant
 from core.db import table_exists
 from models.combined_group import CombinedGroup
 from models.combined_group_section import CombinedGroupSection
-from models.combined_subject_group import CombinedSubjectGroup
-from models.combined_subject_section import CombinedSubjectSection
 from models.elective_block import ElectiveBlock
 from models.elective_block_subject import ElectiveBlockSubject
 from models.room import Room
 from models.section import Section
-from models.section_break import SectionBreak
 from models.section_elective_block import SectionElectiveBlock
 from models.section_subject import SectionSubject
 from models.section_time_window import SectionTimeWindow
@@ -322,19 +319,6 @@ def _load_allowed_slots(ctx: SolverContext) -> None:
                 if ts is not None and ts.id not in ctx.lunch_slot_ids:
                     ctx.allowed_slots_by_section[section.id].add(ts.id)
 
-    # Remove section breaks
-    if ctx.sections:
-        q_breaks = (
-            select(SectionBreak.section_id, SectionBreak.slot_id)
-            .where(SectionBreak.run_id == ctx.run.id)
-            .where(SectionBreak.section_id.in_([s.id for s in ctx.sections]))
-        )
-        q_breaks = where_tenant(q_breaks, SectionBreak, tenant_id)
-        break_rows = db.execute(q_breaks).all()
-        if break_rows:
-            for sec_id, slot_id in break_rows:
-                ctx.allowed_slots_by_section[sec_id].discard(slot_id)
-
     # Precompute allowed slot indices per (section, day)
     for section in ctx.sections:
         for slot_id in ctx.allowed_slots_by_section.get(section.id, set()):
@@ -350,49 +334,26 @@ def _load_combined_groups(ctx: SolverContext) -> None:
     db = ctx.db
     tenant_id = ctx.tenant_id
 
-    use_v2 = table_exists(db, "combined_groups") and table_exists(db, "combined_group_sections")
-    if use_v2:
-        q_combined = (
-            select(
-                CombinedGroup.id,
-                CombinedGroup.subject_id,
-                CombinedGroup.teacher_id,
-                CombinedGroupSection.section_id,
-            )
-            .join(CombinedGroupSection, CombinedGroupSection.combined_group_id == CombinedGroup.id)
-            .join(Subject, Subject.id == CombinedGroup.subject_id)
-            .where(Subject.program_id == ctx.program_id)
-            .where(Subject.is_active.is_(True))
+    q_combined = (
+        select(
+            CombinedGroup.id,
+            CombinedGroup.subject_id,
+            CombinedGroup.teacher_id,
+            CombinedGroupSection.section_id,
         )
-        if ctx.solve_year_ids:
-            q_combined = q_combined.where(
-                CombinedGroup.academic_year_id.in_(ctx.solve_year_ids)
-            ).where(Subject.academic_year_id.in_(ctx.solve_year_ids))
-        q_combined = where_tenant(q_combined, CombinedGroup, tenant_id)
-        q_combined = where_tenant(q_combined, CombinedGroupSection, tenant_id)
-        q_combined = where_tenant(q_combined, Subject, tenant_id)
-        combined_rows = db.execute(q_combined).all()
-    else:
-        q_combined = (
-            select(
-                CombinedSubjectGroup.id,
-                CombinedSubjectGroup.subject_id,
-                literal(None).label("teacher_id"),
-                CombinedSubjectSection.section_id,
-            )
-            .join(CombinedSubjectSection, CombinedSubjectSection.combined_group_id == CombinedSubjectGroup.id)
-            .join(Subject, Subject.id == CombinedSubjectGroup.subject_id)
-            .where(Subject.program_id == ctx.program_id)
-            .where(Subject.is_active.is_(True))
-        )
-        if ctx.solve_year_ids:
-            q_combined = q_combined.where(
-                CombinedSubjectGroup.academic_year_id.in_(ctx.solve_year_ids)
-            ).where(Subject.academic_year_id.in_(ctx.solve_year_ids))
-        q_combined = where_tenant(q_combined, CombinedSubjectGroup, tenant_id)
-        q_combined = where_tenant(q_combined, CombinedSubjectSection, tenant_id)
-        q_combined = where_tenant(q_combined, Subject, tenant_id)
-        combined_rows = db.execute(q_combined).all()
+        .join(CombinedGroupSection, CombinedGroupSection.combined_group_id == CombinedGroup.id)
+        .join(Subject, Subject.id == CombinedGroup.subject_id)
+        .where(Subject.program_id == ctx.program_id)
+        .where(Subject.is_active.is_(True))
+    )
+    if ctx.solve_year_ids:
+        q_combined = q_combined.where(
+            CombinedGroup.academic_year_id.in_(ctx.solve_year_ids)
+        ).where(Subject.academic_year_id.in_(ctx.solve_year_ids))
+    q_combined = where_tenant(q_combined, CombinedGroup, tenant_id)
+    q_combined = where_tenant(q_combined, CombinedGroupSection, tenant_id)
+    q_combined = where_tenant(q_combined, Subject, tenant_id)
+    combined_rows = db.execute(q_combined).all()
 
     group_sections: dict[Any, list[Any]] = defaultdict(list)
     group_subject: dict[Any, Any] = {}

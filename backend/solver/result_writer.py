@@ -124,6 +124,12 @@ def write_results(ctx: SolverContext, solver: cp_model.CpSolver, status: int) ->
             f" More time may produce a better timetable.{gap_info}"
         )
     run.solver_version = "cp-sat-v1"
+    run.solve_time_seconds = ctx.solve_time_seconds
+    run.total_variables = len(ctx.x) + len(ctx.z)
+    # constraints: use solver num_constraints if available, else None
+    if hasattr(solver, "NumBooleans"):
+        run.total_constraints = None  # CP-SAT doesn't expose this directly
+    run.objective_value = float(ctx.objective_score) if ctx.objective_score is not None else None
     try:
         db.commit()
     except IntegrityError:

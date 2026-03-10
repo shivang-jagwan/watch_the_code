@@ -55,23 +55,30 @@ def apply_pre_solve_locks(ctx: SolverContext) -> None:
 
 
 def _ensure_elective_batches(ctx: SolverContext) -> None:
-    """Prepare deterministic elective section batches (default chunk size: 3)."""
+    """Prepare deterministic elective section batches.
+
+    Batch size is capped by ``elective_block.max_parallel_sections`` when set,
+    otherwise defaults to 3.
+    """
     if ctx.elective_batches_by_block:
         return
 
-    BATCH_SIZE = 3
+    DEFAULT_BATCH_SIZE = 3
     section_code_by_id = {getattr(s, "id", None): str(getattr(s, "code", "")) for s in ctx.sections}
 
     for block_id, sec_ids in ctx.sections_by_block.items():
         if not sec_ids:
             continue
+        block = ctx.elective_block_by_id.get(block_id)
+        max_par = getattr(block, "max_parallel_sections", None) if block else None
+        batch_size = int(max_par) if max_par is not None and int(max_par) >= 1 else DEFAULT_BATCH_SIZE
         ordered = sorted(
             sec_ids,
             key=lambda sid: (section_code_by_id.get(sid, ""), str(sid)),
         )
         batches: list[list[Any]] = []
-        for i in range(0, len(ordered), BATCH_SIZE):
-            batch = ordered[i : i + BATCH_SIZE]
+        for i in range(0, len(ordered), batch_size):
+            batch = ordered[i : i + batch_size]
             if batch:
                 batches.append(batch)
         ctx.elective_batches_by_block[block_id] = batches
@@ -292,33 +299,47 @@ def _prune_teacher_slots(ctx: SolverContext) -> None:
             ctx.teacher_disallowed_slot_ids[teacher_id].add(ts.id)
 
     # --- Teacher time-window enforcement -------------------------------------
-    # For every teacher that has time windows defined, collect the set of slot
-    # IDs that fall *inside* at least one window.  Any slot NOT in that set is
-    # blocked.  Windows with day_of_week=None apply to every active day.
+    # strict windows (is_strict=True or default) → hard prune (teacher_disallowed_slot_ids)
+    # soft windows (is_strict=False) → slot ids recorded in teacher_soft_window_slots for
+    # the objective penalty; teacher can still be placed there but it costs.
     for teacher_id, windows in ctx.teacher_windows_by_id.items():
         if not windows:
             continue
 
-        allowed_for_teacher: set = set()
+        strict_allowed: set = set()
+        soft_allowed: set = set()
+        has_strict = any(bool(getattr(w, "is_strict", True)) for w in windows)
+
         for w in windows:
             start_si = int(w.start_slot_index)
             end_si = int(w.end_slot_index)
+            w_is_strict = bool(getattr(w, "is_strict", True))
             if w.day_of_week is not None:
                 days = [int(w.day_of_week)]
             else:
-                # All active days observed by this tenant's time slots
                 days = list(ctx.slots_by_day.keys())
 
             for day in days:
                 for si in range(start_si, end_si + 1):
                     ts = ctx.slot_by_day_index.get((day, si))
                     if ts is not None:
-                        allowed_for_teacher.add(ts.id)
+                        if w_is_strict:
+                            strict_allowed.add(ts.id)
+                        else:
+                            soft_allowed.add(ts.id)
 
-        # Block every slot NOT inside the teacher's windows
-        all_slot_ids: set = {ts.id for day_slots in ctx.slots_by_day.values() for ts in day_slots}
-        for slot_id in all_slot_ids - allowed_for_teacher:
-            ctx.teacher_disallowed_slot_ids[teacher_id].add(slot_id)
+        # Hard prune: block all slots outside strict windows (only when at least
+        # one strict window exists).
+        if has_strict:
+            all_slot_ids: set = {ts.id for day_slots in ctx.slots_by_day.values() for ts in day_slots}
+            for slot_id in all_slot_ids - strict_allowed:
+                ctx.teacher_disallowed_slot_ids[teacher_id].add(slot_id)
+
+        # Soft prune: record which slots the teacher would prefer to avoid but
+        # can still use (only slots not already hard-blocked).
+        soft_outside = soft_allowed - strict_allowed - ctx.teacher_disallowed_slot_ids.get(teacher_id, set())
+        if soft_outside:
+            ctx.teacher_soft_window_slots.setdefault(teacher_id, set()).update(soft_outside)
 
 
 def check_teacher_window_feasibility(ctx: SolverContext) -> list[str]:

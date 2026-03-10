@@ -175,6 +175,7 @@ def create_subject(
         max_per_day=payload.max_per_day,
         lab_block_size_slots=payload.lab_block_size_slots,
         is_active=payload.is_active,
+        credits=payload.credits,
     )
     db.add(subject)
     try:
@@ -249,6 +250,7 @@ def put_subject(
     subject.max_per_day = int(payload.max_per_day)
     subject.lab_block_size_slots = int(payload.lab_block_size_slots)
     subject.is_active = bool(payload.is_active)
+    subject.credits = int(payload.credits)
 
     try:
         db.commit()

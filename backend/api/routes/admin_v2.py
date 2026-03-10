@@ -1324,7 +1324,7 @@ def _build_elective_block_out(db: Session, *, block: ElectiveBlock, academic_yea
         name=block.name,
         code=block.code,
         is_active=bool(block.is_active),
-        subjects=[
+        max_parallel_sections=getattr(block, "max_parallel_sections", None),
             ElectiveBlockSubjectOut(
                 id=_ebs.id,
                 subject_id=subj.id,
@@ -1397,6 +1397,7 @@ def create_elective_block(
         name=payload.name.strip(),
         code=(payload.code.strip() if payload.code else None),
         is_active=bool(payload.is_active),
+        max_parallel_sections=payload.max_parallel_sections,
     )
     db.add(block)
     try:
@@ -1443,6 +1444,8 @@ def update_elective_block(
         block.code = payload.code.strip() if payload.code else None
     if payload.is_active is not None:
         block.is_active = bool(payload.is_active)
+    if payload.max_parallel_sections is not None:
+        block.max_parallel_sections = payload.max_parallel_sections
 
     try:
         db.commit()

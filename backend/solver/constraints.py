@@ -35,6 +35,7 @@ def add_constraints(ctx: SolverContext) -> None:
     _add_teacher_max_continuous(ctx)
     _add_teacher_compactness(ctx)
     _add_daily_load_balance(ctx)
+    _add_section_max_daily_slots(ctx)
     if ctx.enforce_teacher_load_limits:
         _add_teacher_load_limits(ctx)
 
@@ -220,6 +221,24 @@ def _add_section_no_overlap(ctx: SolverContext) -> None:
             terms = ctx.section_slot_terms.get((section.id, slot_id), [])
             if terms:
                 model.Add(sum(terms) <= 1)
+
+
+def _add_section_max_daily_slots(ctx: SolverContext) -> None:
+    """Enforce sections.max_daily_slots: at most N classes per calendar day."""
+    model = ctx.model
+    for section in ctx.sections:
+        cap = getattr(section, "max_daily_slots", None)
+        if cap is None:
+            continue
+        cap = int(cap)
+        for day in range(6):
+            day_terms: list = []
+            for slot_id in ctx.allowed_slots_by_section.get(section.id, set()):
+                d, _ = ctx.slot_info.get(slot_id, (None, None))
+                if d is not None and int(d) == day:
+                    day_terms.extend(ctx.section_slot_terms.get((section.id, slot_id), []))
+            if day_terms:
+                model.Add(sum(day_terms) <= cap)
 
 
 # ── Section compactness ─────────────────────────────────────────────────────

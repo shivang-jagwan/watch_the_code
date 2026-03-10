@@ -184,6 +184,8 @@ class SolverContext:
     locked_fixed_entry_ids: set[str] = field(default_factory=set)
 
     teacher_disallowed_slot_ids: dict[Any, set[Any]] = field(default_factory=lambda: defaultdict(set))
+    # Slots the teacher prefers to avoid (soft window) — used by objective penalty.
+    teacher_soft_window_slots: dict[Any, set[Any]] = field(default_factory=dict)
 
     # --- CP-SAT model & decision variables -----------------------------------
     model: cp_model.CpModel = field(default_factory=cp_model.CpModel)

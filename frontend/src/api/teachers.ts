@@ -31,6 +31,7 @@ export type TeacherTimeWindow = {
   day_of_week: number | null
   start_slot_index: number
   end_slot_index: number
+  is_strict: boolean
   created_at: string
 }
 

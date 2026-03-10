@@ -11,6 +11,7 @@ class TeacherTimeWindowItem(BaseModel):
     day_of_week: int | None = Field(default=None, ge=0, le=5)
     start_slot_index: int = Field(ge=0)
     end_slot_index: int = Field(ge=0)
+    is_strict: bool = True
 
     @model_validator(mode="after")
     def _check_order(self) -> "TeacherTimeWindowItem":

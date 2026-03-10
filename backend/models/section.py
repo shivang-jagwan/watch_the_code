@@ -31,9 +31,15 @@ class Section(Base):
     strength = Column(Integer, nullable=False, default=0)
     track = Column(SECTION_TRACK, nullable=False, default="CORE")
     is_active = Column(Boolean, nullable=False, default=True)
+    # Hard cap on classes per day for this section (NULL = no cap beyond time window).
+    max_daily_slots = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
         CheckConstraint("strength >= 0", name="ck_sections_strength"),
+        CheckConstraint(
+            "max_daily_slots IS NULL OR max_daily_slots >= 0",
+            name="ck_sections_max_daily_slots",
+        ),
         UniqueConstraint("tenant_id", "code", name="uq_sections_tenant_code"),
     )

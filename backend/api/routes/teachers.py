@@ -257,6 +257,7 @@ def put_teacher_time_windows(
                 day_of_week=w.day_of_week,
                 start_slot_index=int(w.start_slot_index),
                 end_slot_index=int(w.end_slot_index),
+                is_strict=bool(w.is_strict),
             )
         )
 
@@ -288,6 +289,7 @@ def create_teacher_time_window(
         day_of_week=payload.day_of_week,
         start_slot_index=int(payload.start_slot_index),
         end_slot_index=int(payload.end_slot_index),
+        is_strict=bool(payload.is_strict),
     )
     db.add(row)
     try:

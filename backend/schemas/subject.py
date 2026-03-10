@@ -16,6 +16,7 @@ class SubjectBase(BaseModel):
     max_per_day: int = Field(default=1, ge=0)
     lab_block_size_slots: int = Field(default=1, ge=1)
     is_active: bool = True
+    credits: int = Field(default=0, ge=0)
 
 
 class SubjectCreate(SubjectBase):
@@ -30,6 +31,7 @@ class SubjectUpdate(BaseModel):
     max_per_day: int | None = Field(default=None, ge=0)
     lab_block_size_slots: int | None = Field(default=None, ge=1)
     is_active: bool | None = None
+    credits: int | None = Field(default=None, ge=0)
 
 
 class SubjectPut(BaseModel):
@@ -39,6 +41,7 @@ class SubjectPut(BaseModel):
     max_per_day: int = Field(ge=1)
     lab_block_size_slots: int = Field(ge=1)
     is_active: bool = True
+    credits: int = Field(default=0, ge=0)
 
 
 class SubjectOut(BaseModel):
@@ -52,6 +55,7 @@ class SubjectOut(BaseModel):
     max_per_day: int
     lab_block_size_slots: int
     is_active: bool
+    credits: int
     created_at: datetime
 
     class Config:

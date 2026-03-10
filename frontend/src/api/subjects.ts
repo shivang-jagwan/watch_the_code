@@ -10,6 +10,7 @@ export type Subject = {
   max_per_day: number
   lab_block_size_slots: number
   is_active: boolean
+  credits: number
   created_at: string
 }
 
@@ -23,6 +24,7 @@ export type SubjectCreate = {
   max_per_day: number
   lab_block_size_slots: number
   is_active: boolean
+  credits?: number
 }
 
 export type SubjectPut = Pick<
@@ -33,6 +35,7 @@ export type SubjectPut = Pick<
   | 'max_per_day'
   | 'lab_block_size_slots'
   | 'is_active'
+  | 'credits'
 >
 
 export async function listSubjects(params: {

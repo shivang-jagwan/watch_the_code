@@ -8,6 +8,7 @@ export type Section = {
   strength: number
   track: 'CORE' | 'CYBER' | 'AI_DS' | 'AI_ML' | string
   is_active: boolean
+  max_daily_slots: number | null
   created_at: string
 }
 
@@ -19,6 +20,7 @@ export type SectionCreate = {
   strength: number
   track: 'CORE' | 'CYBER' | 'AI_DS' | 'AI_ML' | string
   is_active: boolean
+  max_daily_slots?: number | null
 }
 
 export type SectionStrengthPut = {

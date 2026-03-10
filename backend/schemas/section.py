@@ -14,9 +14,7 @@ class SectionBase(BaseModel):
     strength: int = Field(default=0, ge=0)
     track: str = Field(default='CORE', min_length=1)
     is_active: bool = True
-
-
-class SectionCreate(SectionBase):
+    max_daily_slots: int | None = None
     pass
 
 
@@ -26,6 +24,7 @@ class SectionUpdate(BaseModel):
     strength: int | None = Field(default=None, ge=0)
     track: str | None = None
     is_active: bool | None = None
+    max_daily_slots: int | None = None
 
 
 class SectionPut(BaseModel):
@@ -34,6 +33,7 @@ class SectionPut(BaseModel):
     strength: int = Field(default=0, ge=0)
     track: str = Field(min_length=1)
     is_active: bool = True
+    max_daily_slots: int | None = None
 
 
 class SectionStrengthPut(BaseModel):
@@ -49,6 +49,7 @@ class SectionOut(BaseModel):
     strength: int
     track: str
     is_active: bool
+    max_daily_slots: int | None
     created_at: datetime
 
     class Config:

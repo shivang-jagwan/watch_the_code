@@ -192,6 +192,7 @@ class ElectiveBlockOut(BaseModel):
     name: str
     code: str | None = None
     is_active: bool = True
+    max_parallel_sections: int | None = None
     subjects: list[ElectiveBlockSubjectOut] = Field(default_factory=list)
     sections: list[ElectiveBlockSectionOut] = Field(default_factory=list)
     created_at: datetime
@@ -203,12 +204,14 @@ class CreateElectiveBlockRequest(BaseModel):
     name: str = Field(min_length=1)
     code: str | None = None
     is_active: bool = True
+    max_parallel_sections: int | None = Field(default=None, ge=1)
 
 
 class UpdateElectiveBlockRequest(BaseModel):
     name: str | None = None
     code: str | None = None
     is_active: bool | None = None
+    max_parallel_sections: int | None = Field(default=None, ge=1)
 
 
 class UpsertElectiveBlockSubjectRequest(BaseModel):

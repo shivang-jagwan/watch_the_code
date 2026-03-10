@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, Text
 from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.sql import func
 
@@ -36,3 +36,8 @@ class TimetableRun(Base):
     solver_version = Column(Text, nullable=True)
     parameters = Column(JSONB, nullable=False, default=dict)
     notes = Column(Text, nullable=True)
+    # Solver metadata — populated by result_writer after solution is found.
+    solve_time_seconds = Column(Float, nullable=True)
+    total_variables    = Column(Integer, nullable=True)
+    total_constraints  = Column(Integer, nullable=True)
+    objective_value    = Column(Float, nullable=True)

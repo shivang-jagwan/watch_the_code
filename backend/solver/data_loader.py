@@ -519,23 +519,32 @@ def _build_index_maps(ctx: SolverContext) -> None:
 
 
 def build_pruned_slots(ctx: SolverContext) -> None:
-    """Compute valid_slots_by_section_subject — the key slot-pruning optimization.
+    """Compute pruned slot sets for all variable types — the key domain-pruning step.
 
     This function is called by cp_sat_solver._solve_program() AFTER
     apply_pre_solve_locks() so that teacher_disallowed_slot_ids is already
     populated.
 
-    For each (section, subject) pair that needs solver variables, the pruned
-    list filters out:
-      1. Slots outside the section's time window (already captured by
-         allowed_slots_by_section, but we do it per-subject for LABs).
-      2. Slots blocked by teacher_disallowed_slot_ids (teacher off-day +
-         locked allotment slots).
-      3. For LAB subjects: slot-starts where the full contiguous block does
-         NOT fit within the same day's allowed slots.
+    Stage 1 — Per-(section, subject) pruning (stored in valid_slots_by_section_subject):
+      Filters out slots that violate any of:
+        • section time window (captured by allowed_slots_by_section)
+        • teacher off-day / locked slots (teacher_disallowed_slot_ids)
+        • not already locked by a special-allotment / fixed-entry
+        • for LAB subjects: start positions where the full contiguous block
+          does NOT fit within the same day's allowed slots
 
-    RESULT: variable creation in variables.py iterates only valid slots,
-    cutting variable count by 40–70% on typical datasets.
+    Stage 2 — Combined-group pruning (stored in valid_slots_for_combined_group):
+      For each combined THEORY group, computes the intersection of allowed
+      slots across all member sections and removes teacher-blocked slots.
+      _create_combined_theory_vars reads these pre-computed lists directly.
+
+    Stage 3 — Elective-batch pruning (stored in valid_slots_for_elective_batch):
+      For each (block, batch), intersects the allowed slots of all batch
+      sections and removes all elective-teacher-blocked slots.
+      _create_elective_block_vars reads these pre-computed lists directly.
+
+    RESULT: CP-SAT variable creation iterates only valid slots for every
+    variable type, cutting total variable count by 40–70% on typical datasets.
     """
     dallowed = ctx.teacher_disallowed_slot_ids  # teacher_id → set[slot_id]
 
@@ -593,19 +602,76 @@ def build_pruned_slots(ctx: SolverContext) -> None:
                 ]
                 ctx.valid_slots_by_section_subject[(sec_id, subject_id)] = pruned_theory
 
-        # Also prune slots for combined-group THEORY subjects
-        # (variables.py will skip them, but build the map for completeness)
-        for (s_id, subj_id), gid in ctx.combined_gid_by_sec_subj.items():
-            if s_id != sec_id:
-                continue
-            subj = ctx.subject_by_id.get(subj_id)
-            if subj is None or str(subj.subject_type) != "THEORY":
-                continue
-            # Combined vars are created per-group in _create_combined_theory_vars;
-            # we don't need per-section pruning here — the group-level intersection
-            # already happens there.
 
-    # Elective block sections: also prune for z-var slots
-    # (the elective block variable creation intersects across batch sections,
-    #  so individual pruning is done per batch there; no pre-pruning needed here)
+    # ── Combined-group pruning ────────────────────────────────────────────
+    # Pre-compute the valid slot list for each combined THEORY group so that
+    # _create_combined_theory_vars can use a direct lookup instead of
+    # recomputing a set intersection at model-build time.
+    for group_id, sec_ids in ctx.group_sections.items():
+        subj_id = ctx.group_subject.get(group_id)
+        if subj_id is None:
+            continue
+        subj = ctx.subject_by_id.get(subj_id)
+        if subj is None or str(subj.subject_type) != "THEORY":
+            continue
+
+        assigned_teacher_id = ctx.group_teacher_id.get(group_id)
+        if assigned_teacher_id is None:
+            # Legacy fallback: derive teacher from per-section assignments.
+            for sid in sec_ids:
+                tid = ctx.assigned_teacher_by_section_subject.get((sid, subj_id))
+                if tid is None:
+                    assigned_teacher_id = None
+                    break
+                if assigned_teacher_id is None:
+                    assigned_teacher_id = tid
+                elif assigned_teacher_id != tid:
+                    assigned_teacher_id = None
+                    break
+        if assigned_teacher_id is None:
+            ctx.valid_slots_for_combined_group[group_id] = []
+            continue
+
+        combined_allowed: set[Any] | None = None
+        for sid in sec_ids:
+            s_allowed = set(ctx.allowed_slots_by_section.get(sid, set()))
+            combined_allowed = s_allowed if combined_allowed is None else (combined_allowed & s_allowed)
+        if not combined_allowed:
+            ctx.valid_slots_for_combined_group[group_id] = []
+            continue
+
+        teacher_blocked_cg: set[Any] = dallowed.get(assigned_teacher_id, set())
+        ctx.valid_slots_for_combined_group[group_id] = sorted(combined_allowed - teacher_blocked_cg)
+
+    # ── Elective-batch pruning ────────────────────────────────────────────
+    # apply_pre_solve_locks() already called _ensure_elective_batches(), so
+    # ctx.elective_batches_by_block is fully populated here.  Pre-compute
+    # per-batch valid slot lists so _create_elective_block_vars does O(1)
+    # lookups instead of recomputing intersections at model-build time.
+    for block_id, sec_ids_in_block in ctx.sections_by_block.items():
+        if not sec_ids_in_block:
+            continue
+        pairs = ctx.block_subject_pairs_by_block.get(block_id, [])
+        if not pairs:
+            continue
+        eb_subj_objs = [ctx.subject_by_id.get(subj_id) for subj_id, _tid in pairs]
+        eb_subj_objs = [s for s in eb_subj_objs if s is not None]
+        if len(eb_subj_objs) != len(pairs):
+            continue
+        if any(str(s.subject_type) != "THEORY" for s in eb_subj_objs):
+            continue
+
+        eb_blocked: set[Any] = set()
+        for _subj_id, teacher_id in pairs:
+            eb_blocked.update(dallowed.get(teacher_id, set()))
+
+        for batch_idx, batch_sec_ids in enumerate(ctx.elective_batches_by_block.get(block_id, [])):
+            eb_allowed: set[Any] | None = None
+            for sec_id in batch_sec_ids:
+                s_allowed = set(ctx.allowed_slots_by_section.get(sec_id, set()))
+                eb_allowed = s_allowed if eb_allowed is None else (eb_allowed & s_allowed)
+            if not eb_allowed:
+                ctx.valid_slots_for_elective_batch[(block_id, batch_idx)] = []
+                continue
+            ctx.valid_slots_for_elective_batch[(block_id, batch_idx)] = sorted(eb_allowed - eb_blocked)
 

@@ -194,16 +194,20 @@ def _solve_program(
     num_vars = len(ctx.model.Proto().variables)
     num_constraints = len(ctx.model.Proto().constraints)
     slots_total = sum(len(v) for v in ctx.valid_slots_by_section_subject.values())
+    combined_slots_total = sum(len(v) for v in ctx.valid_slots_for_combined_group.values())
+    elective_slots_total = sum(len(v) for v in ctx.valid_slots_for_elective_batch.values())
     ctx.pre_solve_metrics = {
         "num_vars": num_vars,
         "num_constraints": num_constraints,
         "pruned_slots_total": slots_total,
+        "combined_slots_total": combined_slots_total,
+        "elective_slots_total": elective_slots_total,
         "sections": len(ctx.sections),
         "teachers": len(ctx.teachers),
     }
     logger.info(
-        "[solver] pre-solve: vars=%d constraints=%d pruned_slot_lists=%d sections=%d teachers=%d",
-        num_vars, num_constraints, slots_total,
+        "[solver] pre-solve: vars=%d constraints=%d pruned_slots=%d combined_slots=%d elective_slots=%d sections=%d teachers=%d",
+        num_vars, num_constraints, slots_total, combined_slots_total, elective_slots_total,
         ctx.pre_solve_metrics["sections"], ctx.pre_solve_metrics["teachers"],
     )
     # Structured stats block for operators.

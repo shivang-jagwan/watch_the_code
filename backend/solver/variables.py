@@ -19,6 +19,13 @@ OPTIMIZATION CHANGES (2026-03):
      once during variable creation and used directly in constraints.py,
      eliminating repeated iteration over all variables per constraint.
 
+  4. COMBINED-GROUP & ELECTIVE-BATCH PRUNING — _create_combined_theory_vars
+     and _create_elective_block_vars now read pre-computed slot lists from
+     ctx.valid_slots_for_combined_group and ctx.valid_slots_for_elective_batch
+     (populated by data_loader.build_pruned_slots, Stages 2 & 3).  The
+     inline set-intersection and teacher-block subtraction that previously
+     happened at model-build time is eliminated for the fast path.
+
 Original extracts: lines ~700-1040 from the original _solve_program.
 """
 
@@ -297,14 +304,6 @@ def _create_combined_theory_vars(ctx: SolverContext) -> None:
         if sessions_per_week <= 0:
             continue
 
-        # Must be allowed for ALL sections in the group.
-        allowed = None
-        for sid in sec_ids:
-            s_allowed = set(ctx.allowed_slots_by_section.get(sid, set()))
-            allowed = s_allowed if allowed is None else (allowed & s_allowed)
-        if not allowed:
-            continue
-
         assigned_teacher_id = ctx.group_teacher_id.get(group_id)
         if assigned_teacher_id is None:
             # Legacy fallback
@@ -322,11 +321,23 @@ def _create_combined_theory_vars(ctx: SolverContext) -> None:
             continue
 
         ctx.effective_teacher_by_gid[group_id] = assigned_teacher_id
-        teacher_blocked = ctx.teacher_disallowed_slot_ids.get(assigned_teacher_id, set())
 
-        # OPTIMIZATION: filter teacher-blocked slots from the intersection set
-        # before creating variables, removing the per-slot check from the loop.
-        valid_combined = sorted(allowed - teacher_blocked)
+        # OPTIMIZATION: use the pre-computed valid slot list from build_pruned_slots
+        # (section-window intersection minus teacher-blocked slots, computed once
+        # before model build).  Falls back to inline computation for test bypasses.
+        valid_combined = ctx.valid_slots_for_combined_group.get(group_id)
+        if valid_combined is None:
+            # Fallback: recompute the section-window intersection on the fly.
+            allowed = None
+            for sid in sec_ids:
+                s_allowed = set(ctx.allowed_slots_by_section.get(sid, set()))
+                allowed = s_allowed if allowed is None else (allowed & s_allowed)
+            if not allowed:
+                continue
+            teacher_blocked = ctx.teacher_disallowed_slot_ids.get(assigned_teacher_id, set())
+            valid_combined = sorted(allowed - teacher_blocked)
+        elif not valid_combined:
+            continue
 
         for slot_id in valid_combined:
             slot_i = ctx.slot_idx_map.get(slot_id, slot_id)
@@ -393,16 +404,21 @@ def _create_elective_block_vars(ctx: SolverContext) -> None:
 
         batches = ctx.elective_batches_by_block.get(block_id, [])
         for batch_idx, batch_sec_ids in enumerate(batches):
-            allowed: set[Any] | None = None
-            for sec_id in batch_sec_ids:
-                s_allowed = set(ctx.allowed_slots_by_section.get(sec_id, set()))
-                allowed = s_allowed if allowed is None else (allowed & s_allowed)
-            if not allowed:
+            # OPTIMIZATION: use pre-computed valid slot list from build_pruned_slots.
+            # Falls back to inline intersection when build_pruned_slots was bypassed
+            # (e.g. in unit tests that don't call the full pipeline).
+            valid_batch = ctx.valid_slots_for_elective_batch.get((block_id, batch_idx))
+            if valid_batch is None:
+                # Fallback: compute the intersection inline.
+                allowed: set[Any] | None = None
+                for sec_id in batch_sec_ids:
+                    s_allowed = set(ctx.allowed_slots_by_section.get(sec_id, set()))
+                    allowed = s_allowed if allowed is None else (allowed & s_allowed)
+                if not allowed:
+                    continue
+                valid_batch = sorted(allowed - all_teacher_blocked)
+            elif not valid_batch:
                 continue
-
-            # OPTIMIZATION: subtract all teacher-blocked slots in one set
-            # operation instead of checking per-slot inside the loop.
-            valid_batch = sorted(allowed - all_teacher_blocked)
 
             for slot_id in valid_batch:
                 slot_i = ctx.slot_idx_map.get(slot_id, slot_id)

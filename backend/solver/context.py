@@ -291,6 +291,18 @@ class SolverContext:
     # block of lab_block_size_slots can start at that slot.
     valid_slots_by_section_subject: dict[tuple[Any, Any], list[Any]] = field(default_factory=dict)
 
+    # Pre-computed valid slots for combined THEORY groups.
+    # group_id → sorted list of slot_ids valid for ALL sections in the group
+    # (section-window intersection minus teacher-blocked slots).
+    # Populated by data_loader.build_pruned_slots().
+    valid_slots_for_combined_group: dict[Any, list[Any]] = field(default_factory=dict)
+
+    # Pre-computed valid slots for elective batches.
+    # (block_id, batch_idx) → sorted list of valid slot_ids
+    # (intersection across batch sections, minus all teacher-blocked slots).
+    # Populated by data_loader.build_pruned_slots().
+    valid_slots_for_elective_batch: dict[tuple[Any, int], list[Any]] = field(default_factory=dict)
+
     # ── OPTIMIZATION: Pre-solve metrics ──────────────────────────────────
     # Populated by cp_sat_solver.py before calling solver.Solve().
     # Exposed in solver_stats so operators can track model size over time.

@@ -1325,6 +1325,7 @@ def _build_elective_block_out(db: Session, *, block: ElectiveBlock, academic_yea
         code=block.code,
         is_active=bool(block.is_active),
         max_parallel_sections=getattr(block, "max_parallel_sections", None),
+        subjects=[
             ElectiveBlockSubjectOut(
                 id=_ebs.id,
                 subject_id=subj.id,

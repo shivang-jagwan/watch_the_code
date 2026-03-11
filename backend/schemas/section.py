@@ -18,6 +18,10 @@ class SectionBase(BaseModel):
     pass
 
 
+class SectionCreate(SectionBase):
+    pass
+
+
 class SectionUpdate(BaseModel):
     code: str | None = None
     name: str | None = None

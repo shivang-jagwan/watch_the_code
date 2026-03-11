@@ -4,6 +4,7 @@ from models.section import Section
 from models.section_subject import SectionSubject
 from models.section_time_window import SectionTimeWindow
 from models.subject import Subject
+from models.curriculum_subject import CurriculumSubject
 from models.teacher import Teacher
 from models.teacher_subject_section import TeacherSubjectSection
 from models.combined_group import CombinedGroup
@@ -27,6 +28,7 @@ __all__ = [
     "SectionSubject",
     "SectionTimeWindow",
     "Subject",
+    "CurriculumSubject",
     "Teacher",
     "TeacherSubjectSection",
     "CombinedGroup",

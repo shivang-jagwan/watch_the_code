@@ -132,7 +132,7 @@ def _apply_special_allotments(ctx: SolverContext) -> None:
         day, slot_idx = int(di[0]), int(di[1])
 
         if str(subj.subject_type) == "LAB":
-            block = int(getattr(subj, "lab_block_size_slots", 1) or 1)
+            block = ctx.lab_block_for(sa.subject_id)
             if block < 1:
                 block = 1
             ctx.locked_lab_sessions_by_sec_subj[(sa.section_id, sa.subject_id)] += 1
@@ -246,7 +246,7 @@ def _apply_fixed_entries(ctx: SolverContext) -> None:
                 continue
 
         if str(subj.subject_type) == "LAB":
-            block = int(getattr(subj, "lab_block_size_slots", 1) or 1)
+            block = ctx.lab_block_for(fe.subject_id)
             if block < 1:
                 block = 1
 

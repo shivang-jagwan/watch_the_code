@@ -185,7 +185,7 @@ def _add_fixed_entry_hard_constraints(ctx: SolverContext) -> None:
                 continue
             model.Add(sv == 1)
 
-            block = int(getattr(subj, "lab_block_size_slots", 1) or 1)
+            block = ctx.lab_block_for(fe.subject_id)
             if block < 1:
                 block = 1
             for j in range(block):
@@ -413,7 +413,7 @@ def _add_subject_day_spread(ctx: SolverContext) -> None:
             continue
         # If max_per_day is 1, a hard constraint already prevents doubling.
         subj = ctx.subject_by_id.get(subj_id)
-        if subj is not None and int(getattr(subj, "max_per_day", 1) or 1) <= 1:
+        if subj is not None and ctx.max_per_day_for(subj_id) <= 1:
             continue
         # pv == 1 iff sum(day_x) >= 2
         # Linearisation:  2*pv <= total  AND  total <= 1 + pv*(N-1)
@@ -430,7 +430,7 @@ def _add_subject_day_spread(ctx: SolverContext) -> None:
         if len(day_starts) < 2:
             continue
         subj = ctx.subject_by_id.get(subj_id)
-        if subj is not None and int(getattr(subj, "max_per_day", 1) or 1) <= 1:
+        if subj is not None and ctx.max_per_day_for(subj_id) <= 1:
             continue
         pv = model.NewBoolVar(f"spread_lab_{sec_id}_{subj_id}_{day}")
         total = sum(day_starts)

@@ -149,6 +149,13 @@ class SolverContext:
     allowed_slots_by_section: dict[Any, set[Any]] = field(default_factory=lambda: defaultdict(set))
     allowed_slot_indices_by_section_day: dict[tuple[Any, int], list[int]] = field(default_factory=lambda: defaultdict(list))
 
+    # ── Curriculum subjects ───────────────────────────────────────────────
+    # Loaded from curriculum_subjects table by data_loader._load_curriculum_subjects().
+    # Keyed by (track, subject_id) for exact lookup; fallback dict by subject_id.
+    curriculum_by_track_subject: dict[tuple[str, Any], Any] = field(default_factory=dict)
+    # subject_id → first/CORE curriculum record (fast fallback for non-track-aware code)
+    curriculum_by_subject_id: dict[Any, Any] = field(default_factory=dict)
+
     # Combined groups
     group_sections: dict[Any, list[Any]] = field(default_factory=lambda: defaultdict(list))
     group_subject: dict[Any, Any] = field(default_factory=dict)
@@ -348,6 +355,42 @@ class SolverContext:
     # conflict analysis and utilisation reporting — eliminates any need to
     # scan ctx.entries or perform pairwise (E²) comparisons.
     entries_by_slot: dict[Any, list[Any]] = field(default_factory=lambda: defaultdict(list))
+
+    # ── Curriculum helpers ────────────────────────────────────────────────
+    def _curriculum_for(self, subject_id: Any, track: str = "CORE") -> Any:
+        """Return best-matching CurriculumSubject or None."""
+        cs = self.curriculum_by_track_subject.get((track, subject_id))
+        if cs is None and track != "CORE":
+            cs = self.curriculum_by_track_subject.get(("CORE", subject_id))
+        if cs is None:
+            cs = self.curriculum_by_subject_id.get(subject_id)
+        return cs
+
+    def sessions_for(self, subject_id: Any, track: str = "CORE", override: Any = None) -> int:
+        """Resolve sessions_per_week from override → curriculum → legacy subject column."""
+        if override is not None:
+            return int(override)
+        cs = self._curriculum_for(subject_id, track)
+        if cs is not None:
+            return int(cs.sessions_per_week)
+        s = self.subject_by_id.get(subject_id)
+        return int(getattr(s, "sessions_per_week", 0) or 0) if s else 0
+
+    def max_per_day_for(self, subject_id: Any, track: str = "CORE") -> int:
+        """Resolve max_per_day from curriculum → legacy subject column."""
+        cs = self._curriculum_for(subject_id, track)
+        if cs is not None:
+            return int(cs.max_per_day)
+        s = self.subject_by_id.get(subject_id)
+        return int(getattr(s, "max_per_day", 1) or 1) if s else 1
+
+    def lab_block_for(self, subject_id: Any, track: str = "CORE") -> int:
+        """Resolve lab_block_size_slots from curriculum → legacy subject column."""
+        cs = self._curriculum_for(subject_id, track)
+        if cs is not None:
+            return int(cs.lab_block_size_slots)
+        s = self.subject_by_id.get(subject_id)
+        return int(getattr(s, "lab_block_size_slots", 1) or 1) if s else 1
 
 
 # ── Task 8: Lightweight sub-context view facades ─────────────────────────────

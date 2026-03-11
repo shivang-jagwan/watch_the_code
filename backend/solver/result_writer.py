@@ -645,7 +645,7 @@ def _write_lab_entries(ctx: SolverContext, solver: cp_model.CpSolver) -> None:
         subj = ctx.subject_by_id.get(subj_id)
         if subj is None:
             continue
-        block = int(getattr(subj, "lab_block_size_slots", 1) or 1)
+        block = ctx.lab_block_for(subj_id)
         if block < 1:
             block = 1
         chosen_t = ctx.assigned_teacher_by_section_subject.get((sec_id, subj_id))

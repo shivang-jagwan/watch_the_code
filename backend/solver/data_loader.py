@@ -20,6 +20,7 @@ from models.combined_group import CombinedGroup
 from models.combined_group_section import CombinedGroupSection
 from models.elective_block import ElectiveBlock
 from models.elective_block_subject import ElectiveBlockSubject
+from models.curriculum_subject import CurriculumSubject
 from models.room import Room
 from models.section import Section
 from models.section_elective_block import SectionElectiveBlock
@@ -110,6 +111,9 @@ def load_all(ctx: SolverContext) -> None:
     q_subjects = where_tenant(q_subjects, Subject, tenant_id)
     ctx.subjects = db.execute(q_subjects).scalars().all()
     ctx.subject_by_id = {s.id: s for s in ctx.subjects}
+
+    # --- Curriculum subjects (scheduling params per program/year/track) ------
+    _load_curriculum_subjects(ctx)
 
     # --- Subject → allowed rooms (optional; table may not exist yet) ---------
     _load_subject_allowed_rooms(ctx)
@@ -220,6 +224,38 @@ def load_all(ctx: SolverContext) -> None:
     # --- Build room sort cache (OPTIMIZATION Task 5) -------------------------
     # Must come after rooms and sections are loaded.
     _build_room_cache(ctx)
+
+
+def _load_curriculum_subjects(ctx: SolverContext) -> None:
+    """Populate ctx.curriculum_by_track_subject and ctx.curriculum_by_subject_id.
+
+    Loads all curriculum_subjects records for the current solve scope
+    (program_id + academic_year_ids).  If the table does not yet exist
+    (migration not applied) this is a no-op — the solver falls back to reading
+    sessions_per_week / max_per_day / lab_block_size_slots directly from the
+    subjects table via the ctx.sessions_for() / ctx.max_per_day_for() /
+    ctx.lab_block_for() helper methods.
+    """
+    db = ctx.db
+    tenant_id = ctx.tenant_id
+    if not table_exists(db, "curriculum_subjects"):
+        return
+
+    q = (
+        select(CurriculumSubject)
+        .where(CurriculumSubject.program_id == ctx.program_id)
+    )
+    if ctx.solve_year_ids:
+        q = q.where(CurriculumSubject.academic_year_id.in_(ctx.solve_year_ids))
+    q = where_tenant(q, CurriculumSubject, tenant_id)
+    rows = db.execute(q).scalars().all()
+
+    for cs in rows:
+        track = str(cs.track)
+        ctx.curriculum_by_track_subject[(track, cs.subject_id)] = cs
+        # CORE wins over any other track for the flat fallback lookup
+        if track == "CORE" or cs.subject_id not in ctx.curriculum_by_subject_id:
+            ctx.curriculum_by_subject_id[cs.subject_id] = cs
 
 
 def _load_subject_allowed_rooms(ctx: SolverContext) -> None:

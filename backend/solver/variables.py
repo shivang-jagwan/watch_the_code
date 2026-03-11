@@ -77,8 +77,10 @@ def _create_section_subject_vars(ctx: SolverContext) -> None:
             if assigned_teacher_id is None:
                 continue
 
-            sessions_per_week = (
-                sessions_override if sessions_override is not None else subj.sessions_per_week
+            sessions_per_week = ctx.sessions_for(
+                subject_id,
+                track=str(getattr(section, "track", "CORE") or "CORE"),
+                override=sessions_override,
             )
 
             # Combined THEORY: handled as shared variable per group later.
@@ -112,7 +114,7 @@ def _create_lab_vars(
     is covered.  The inner loop no longer needs to validate those conditions.
     """
     model = ctx.model
-    block = int(getattr(subj, "lab_block_size_slots", 1) or 1)
+    block = ctx.lab_block_for(subject_id, track=str(getattr(section, "track", "CORE") or "CORE"))
     if block < 1:
         block = 1
 
@@ -205,7 +207,7 @@ def _create_lab_vars(
         locked_day = int(
             ctx.locked_lab_sessions_by_sec_subj_day.get((section.id, subject_id, day), 0) or 0
         )
-        cap = int(subj.max_per_day) - locked_day
+        cap = ctx.max_per_day_for(subject_id, track=str(getattr(section, "track", "CORE") or "CORE")) - locked_day
         if cap < 0:
             model.Add(0 == 1)
         elif day_starts:
@@ -280,7 +282,7 @@ def _create_theory_vars(
         locked_day = int(
             ctx.locked_theory_sessions_by_sec_subj_day.get((section.id, subject_id, day), 0) or 0
         )
-        cap = int(subj.max_per_day) - locked_day
+        cap = ctx.max_per_day_for(subject_id, track=str(getattr(section, "track", "CORE") or "CORE")) - locked_day
         if cap < 0:
             model.Add(0 == 1)
         elif day_x:
@@ -299,7 +301,7 @@ def _create_combined_theory_vars(ctx: SolverContext) -> None:
             continue
 
         sessions_per_week = int(
-            ctx.combined_sessions_required.get(group_id, int(subj.sessions_per_week) or 0)
+            ctx.combined_sessions_required.get(group_id, ctx.sessions_for(subj_id) or 0)
         )
         if sessions_per_week <= 0:
             continue
@@ -364,7 +366,7 @@ def _create_combined_theory_vars(ctx: SolverContext) -> None:
         for day in range(6):
             day_terms = ctx.combined_vars_by_gid_day.get((group_id, day), [])
             if day_terms:
-                model.Add(sum(day_terms) <= int(subj.max_per_day))
+                model.Add(sum(day_terms) <= ctx.max_per_day_for(subj_id))
 
 
 def _create_elective_block_vars(ctx: SolverContext) -> None:
@@ -385,14 +387,14 @@ def _create_elective_block_vars(ctx: SolverContext) -> None:
         if any(str(s.subject_type) != "THEORY" for s in subj_objs):
             continue
 
-        sessions_vals = [int(getattr(s, "sessions_per_week", 0) or 0) for s in subj_objs]
+        sessions_vals = [ctx.sessions_for(s.id) for s in subj_objs]
         if not sessions_vals or len(set(sessions_vals)) != 1:
             continue
         sessions_per_week = int(sessions_vals[0])
         if sessions_per_week <= 0:
             continue
 
-        max_per_day = min(int(getattr(s, "max_per_day", 1) or 1) for s in subj_objs)
+        max_per_day = min(ctx.max_per_day_for(s.id) for s in subj_objs)
         if max_per_day < 0:
             max_per_day = 0
 

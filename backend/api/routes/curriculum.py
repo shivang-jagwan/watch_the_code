@@ -13,8 +13,16 @@ from core.db import get_db
 from models.academic_year import AcademicYear
 from models.program import Program
 from models.subject import Subject
+from models.curriculum_subject import CurriculumSubject
 from models.track_subject import TrackSubject
-from schemas.curriculum import TrackSubjectCreate, TrackSubjectOut, TrackSubjectUpdate
+from schemas.curriculum import (
+    CurriculumSubjectCreate,
+    CurriculumSubjectOut,
+    CurriculumSubjectUpdate,
+    TrackSubjectCreate,
+    TrackSubjectOut,
+    TrackSubjectUpdate,
+)
 
 
 router = APIRouter()
@@ -145,6 +153,101 @@ def delete_track_subject(
     row = get_by_id(db, TrackSubject, track_subject_id, tenant_id)
     if row is None:
         raise HTTPException(status_code=404, detail="TRACK_SUBJECT_NOT_FOUND")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Curriculum Subjects ────────────────────────────────────────────────────────
+
+
+@router.get("/curriculum-subjects", response_model=list[CurriculumSubjectOut])
+def list_curriculum_subjects(
+    program_code: str = Query(min_length=1),
+    academic_year_number: int = Query(ge=1, le=4),
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> list[CurriculumSubjectOut]:
+    program = _get_program(db, program_code, tenant_id=tenant_id)
+    ay = _get_academic_year(db, int(academic_year_number), tenant_id=tenant_id)
+    q = (
+        select(CurriculumSubject)
+        .where(CurriculumSubject.program_id == program.id)
+        .where(CurriculumSubject.academic_year_id == ay.id)
+        .order_by(CurriculumSubject.track.asc(), CurriculumSubject.created_at.asc())
+    )
+    q = where_tenant(q, CurriculumSubject, tenant_id)
+    return db.execute(q).scalars().all()
+
+
+@router.post("/curriculum-subjects", response_model=CurriculumSubjectOut)
+def create_curriculum_subject(
+    payload: CurriculumSubjectCreate,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> CurriculumSubjectOut:
+    program = _get_program(db, payload.program_code, tenant_id=tenant_id)
+    ay = _get_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id)
+    subject = _get_subject(db, program.id, ay.id, payload.subject_code, tenant_id=tenant_id)
+
+    row = CurriculumSubject(
+        tenant_id=tenant_id,
+        program_id=program.id,
+        academic_year_id=ay.id,
+        track=payload.track,
+        subject_id=subject.id,
+        sessions_per_week=payload.sessions_per_week,
+        max_per_day=payload.max_per_day,
+        lab_block_size_slots=payload.lab_block_size_slots,
+        is_elective=payload.is_elective,
+    )
+    db.add(row)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="CONFLICT")
+    db.refresh(row)
+    return row
+
+
+@router.patch("/curriculum-subjects/{curriculum_subject_id}", response_model=CurriculumSubjectOut)
+def update_curriculum_subject(
+    curriculum_subject_id: uuid.UUID,
+    payload: CurriculumSubjectUpdate,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> CurriculumSubjectOut:
+    row = get_by_id(db, CurriculumSubject, curriculum_subject_id, tenant_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="CURRICULUM_SUBJECT_NOT_FOUND")
+
+    updates = payload.model_dump(exclude_unset=True)
+    for k, v in updates.items():
+        setattr(row, k, v)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="CONFLICT")
+    db.refresh(row)
+    return row
+
+
+@router.delete("/curriculum-subjects/{curriculum_subject_id}")
+def delete_curriculum_subject(
+    curriculum_subject_id: uuid.UUID,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> dict:
+    row = get_by_id(db, CurriculumSubject, curriculum_subject_id, tenant_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="CURRICULUM_SUBJECT_NOT_FOUND")
     db.delete(row)
     db.commit()
     return {"ok": True}

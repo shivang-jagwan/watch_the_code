@@ -61,7 +61,7 @@ BEGIN
       g.subject_id,
       (
         SELECT CASE
-          WHEN COUNT(DISTINCT tss.teacher_id) = 1 THEN MIN(tss.teacher_id)
+          WHEN COUNT(DISTINCT tss.teacher_id) = 1 THEN MIN(tss.teacher_id::text)::uuid
           ELSE NULL
         END
         FROM combined_subject_sections css

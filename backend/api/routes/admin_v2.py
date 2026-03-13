@@ -164,9 +164,17 @@ def map_program_data_to_year(
     deleted: dict[str, int] = {}
     updated_counts: dict[str, int] = {}
 
-    # Helper subqueries for program scoping.
-    program_subject_ids = select(Subject.id).where(Subject.program_id == program.id)
-    program_section_ids = select(Section.id).where(Section.program_id == program.id)
+    # Helper subqueries for program scoping (tenant-filtered).
+    program_subject_ids = where_tenant(
+        select(Subject.id).where(Subject.program_id == program.id),
+        Subject,
+        tenant_id,
+    )
+    program_section_ids = where_tenant(
+        select(Section.id).where(Section.program_id == program.id),
+        Section,
+        tenant_id,
+    )
 
     def _maybe_exec(stmt, *, key: str, bucket: dict[str, int]):
         if payload.dry_run:
@@ -189,35 +197,65 @@ def map_program_data_to_year(
     # Optional: clear target-year data first to avoid uniqueness conflicts.
     if payload.replace_target:
         _maybe_exec(
-            delete(TimetableEntry).where(
-                TimetableEntry.academic_year_id == to_year.id,
-                TimetableEntry.section_id.in_(program_section_ids),
+            where_tenant(
+                delete(TimetableEntry).where(
+                    TimetableEntry.academic_year_id == to_year.id,
+                    TimetableEntry.section_id.in_(program_section_ids),
+                ),
+                TimetableEntry,
+                tenant_id,
             ),
             key="timetable_entries",
             bucket=deleted,
         )
         _maybe_exec(
-            delete(SpecialAllotment).where(
-                SpecialAllotment.section_id.in_(
-                    select(Section.id).where(Section.program_id == program.id, Section.academic_year_id == to_year.id)
-                )
+            where_tenant(
+                delete(SpecialAllotment).where(
+                    SpecialAllotment.section_id.in_(
+                        where_tenant(
+                            select(Section.id).where(
+                                Section.program_id == program.id,
+                                Section.academic_year_id == to_year.id,
+                            ),
+                            Section,
+                            tenant_id,
+                        ),
+                    )
+                ),
+                SpecialAllotment,
+                tenant_id,
             ),
             key="special_allotments",
             bucket=deleted,
         )
         _maybe_exec(
-            delete(SectionTimeWindow).where(
-                SectionTimeWindow.section_id.in_(
-                    select(Section.id).where(Section.program_id == program.id, Section.academic_year_id == to_year.id)
-                )
+            where_tenant(
+                delete(SectionTimeWindow).where(
+                    SectionTimeWindow.section_id.in_(
+                        where_tenant(
+                            select(Section.id).where(
+                                Section.program_id == program.id,
+                                Section.academic_year_id == to_year.id,
+                            ),
+                            Section,
+                            tenant_id,
+                        ),
+                    )
+                ),
+                SectionTimeWindow,
+                tenant_id,
             ),
             key="section_time_windows",
             bucket=deleted,
         )
         _maybe_exec(
-            delete(TrackSubject).where(
-                TrackSubject.program_id == program.id,
-                TrackSubject.academic_year_id == to_year.id,
+            where_tenant(
+                delete(TrackSubject).where(
+                    TrackSubject.program_id == program.id,
+                    TrackSubject.academic_year_id == to_year.id,
+                ),
+                TrackSubject,
+                tenant_id,
             ),
             key="track_subjects",
             bucket=deleted,
@@ -225,35 +263,51 @@ def map_program_data_to_year(
 
         # Combined groups: clearing target-year groups for this program is safest.
         _maybe_exec(
-            delete(CombinedGroup).where(
-                CombinedGroup.academic_year_id == to_year.id,
-                CombinedGroup.subject_id.in_(program_subject_ids),
+            where_tenant(
+                delete(CombinedGroup).where(
+                    CombinedGroup.academic_year_id == to_year.id,
+                    CombinedGroup.subject_id.in_(program_subject_ids),
+                ),
+                CombinedGroup,
+                tenant_id,
             ),
             key="combined_groups",
             bucket=deleted,
         )
 
         _maybe_exec(
-            delete(ElectiveBlock).where(
-                ElectiveBlock.program_id == program.id,
-                ElectiveBlock.academic_year_id == to_year.id,
+            where_tenant(
+                delete(ElectiveBlock).where(
+                    ElectiveBlock.program_id == program.id,
+                    ElectiveBlock.academic_year_id == to_year.id,
+                ),
+                ElectiveBlock,
+                tenant_id,
             ),
             key="elective_blocks",
             bucket=deleted,
         )
 
         _maybe_exec(
-            delete(Section).where(
-                Section.program_id == program.id,
-                Section.academic_year_id == to_year.id,
+            where_tenant(
+                delete(Section).where(
+                    Section.program_id == program.id,
+                    Section.academic_year_id == to_year.id,
+                ),
+                Section,
+                tenant_id,
             ),
             key="sections",
             bucket=deleted,
         )
         _maybe_exec(
-            delete(Subject).where(
-                Subject.program_id == program.id,
-                Subject.academic_year_id == to_year.id,
+            where_tenant(
+                delete(Subject).where(
+                    Subject.program_id == program.id,
+                    Subject.academic_year_id == to_year.id,
+                ),
+                Subject,
+                tenant_id,
             ),
             key="subjects",
             bucket=deleted,
@@ -261,48 +315,72 @@ def map_program_data_to_year(
 
     # Update core year-scoped entities.
     _maybe_exec(
-        update(Subject)
-        .where(Subject.program_id == program.id, Subject.academic_year_id == from_year.id)
-        .values(academic_year_id=to_year.id),
+        where_tenant(
+            update(Subject)
+            .where(Subject.program_id == program.id, Subject.academic_year_id == from_year.id)
+            .values(academic_year_id=to_year.id),
+            Subject,
+            tenant_id,
+        ),
         key="subjects",
         bucket=updated_counts,
     )
     _maybe_exec(
-        update(Section)
-        .where(Section.program_id == program.id, Section.academic_year_id == from_year.id)
-        .values(academic_year_id=to_year.id),
+        where_tenant(
+            update(Section)
+            .where(Section.program_id == program.id, Section.academic_year_id == from_year.id)
+            .values(academic_year_id=to_year.id),
+            Section,
+            tenant_id,
+        ),
         key="sections",
         bucket=updated_counts,
     )
 
     _maybe_exec(
-        update(ElectiveBlock)
-        .where(ElectiveBlock.program_id == program.id, ElectiveBlock.academic_year_id == from_year.id)
-        .values(academic_year_id=to_year.id),
+        where_tenant(
+            update(ElectiveBlock)
+            .where(ElectiveBlock.program_id == program.id, ElectiveBlock.academic_year_id == from_year.id)
+            .values(academic_year_id=to_year.id),
+            ElectiveBlock,
+            tenant_id,
+        ),
         key="elective_blocks",
         bucket=updated_counts,
     )
     _maybe_exec(
-        update(TrackSubject)
-        .where(TrackSubject.program_id == program.id, TrackSubject.academic_year_id == from_year.id)
-        .values(academic_year_id=to_year.id),
+        where_tenant(
+            update(TrackSubject)
+            .where(TrackSubject.program_id == program.id, TrackSubject.academic_year_id == from_year.id)
+            .values(academic_year_id=to_year.id),
+            TrackSubject,
+            tenant_id,
+        ),
         key="track_subjects",
         bucket=updated_counts,
     )
 
 
     _maybe_exec(
-        update(CombinedGroup)
-        .where(CombinedGroup.academic_year_id == from_year.id, CombinedGroup.subject_id.in_(program_subject_ids))
-        .values(academic_year_id=to_year.id),
+        where_tenant(
+            update(CombinedGroup)
+            .where(CombinedGroup.academic_year_id == from_year.id, CombinedGroup.subject_id.in_(program_subject_ids))
+            .values(academic_year_id=to_year.id),
+            CombinedGroup,
+            tenant_id,
+        ),
         key="combined_groups",
         bucket=updated_counts,
     )
 
     _maybe_exec(
-        update(TimetableEntry)
-        .where(TimetableEntry.academic_year_id == from_year.id, TimetableEntry.section_id.in_(program_section_ids))
-        .values(academic_year_id=to_year.id),
+        where_tenant(
+            update(TimetableEntry)
+            .where(TimetableEntry.academic_year_id == from_year.id, TimetableEntry.section_id.in_(program_section_ids))
+            .values(academic_year_id=to_year.id),
+            TimetableEntry,
+            tenant_id,
+        ),
         key="timetable_entries",
         bucket=updated_counts,
     )

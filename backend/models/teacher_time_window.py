@@ -19,6 +19,7 @@ class TeacherTimeWindow(Base):
     day_of_week = Column(Integer, nullable=True)
     start_slot_index = Column(Integer, nullable=False)
     end_slot_index = Column(Integer, nullable=False)
+    is_strict = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (

@@ -20,6 +20,87 @@ from core.logging import setup_logging
 logger = logging.getLogger(__name__)
 
 
+def _apply_startup_schema_recovery() -> None:
+    """Best-effort schema drift recovery for older deployed databases.
+
+    This keeps production boot resilient when a deployment is ahead of
+    migration state and manual SQL execution is not possible.
+    """
+    with ENGINE.begin() as conn:
+        conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS teacher_time_windows
+                    ADD COLUMN IF NOT EXISTS is_strict BOOLEAN NOT NULL DEFAULT FALSE
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS subjects
+                    ADD COLUMN IF NOT EXISTS credits INTEGER NOT NULL DEFAULT 0
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS sections
+                    ADD COLUMN IF NOT EXISTS max_daily_slots INTEGER DEFAULT NULL
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS timetable_runs
+                    ADD COLUMN IF NOT EXISTS solve_time_seconds DOUBLE PRECISION DEFAULT NULL,
+                    ADD COLUMN IF NOT EXISTS total_variables INTEGER DEFAULT NULL,
+                    ADD COLUMN IF NOT EXISTS total_constraints INTEGER DEFAULT NULL,
+                    ADD COLUMN IF NOT EXISTS objective_value DOUBLE PRECISION DEFAULT NULL
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                  IF to_regclass('public.subjects') IS NOT NULL AND NOT EXISTS (
+                    SELECT 1
+                    FROM information_schema.table_constraints
+                    WHERE table_name = 'subjects'
+                      AND constraint_name = 'ck_subjects_credits'
+                  ) THEN
+                    ALTER TABLE subjects
+                      ADD CONSTRAINT ck_subjects_credits CHECK (credits >= 0);
+                  END IF;
+                END $$;
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                  IF to_regclass('public.sections') IS NOT NULL AND NOT EXISTS (
+                    SELECT 1
+                    FROM information_schema.table_constraints
+                    WHERE table_name = 'sections'
+                      AND constraint_name = 'ck_sections_max_daily_slots'
+                  ) THEN
+                    ALTER TABLE sections
+                      ADD CONSTRAINT ck_sections_max_daily_slots
+                      CHECK (max_daily_slots IS NULL OR max_daily_slots >= 0);
+                  END IF;
+                END $$;
+                """
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # Security headers middleware
 # ---------------------------------------------------------------------------
@@ -167,6 +248,11 @@ def create_app() -> FastAPI:
     @app.on_event("startup")
     def _startup_bootstrap() -> None:
         # Best-effort: don't block app boot if DB is temporarily down.
+        try:
+            _apply_startup_schema_recovery()
+        except Exception:
+            logger.exception("Startup schema recovery failed")
+
         try:
             from core.bootstrap import bootstrap_auth
 

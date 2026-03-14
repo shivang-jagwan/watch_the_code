@@ -39,6 +39,7 @@ from models.timetable_run import TimetableRun
 from models.fixed_timetable_entry import FixedTimetableEntry
 from models.special_allotment import SpecialAllotment
 from models.track_subject import TrackSubject
+from models.curriculum_subject import CurriculumSubject
 from models.elective_block import ElectiveBlock
 from models.elective_block_subject import ElectiveBlockSubject
 from models.combined_group import CombinedGroup
@@ -96,17 +97,30 @@ def _required_subject_ids_for_section(
     if mapped:
         return list(mapped)
 
-    # Track curriculum (+ elective blocks)
-    q_track = (
-        select(TrackSubject)
-        .where(TrackSubject.program_id == program_id)
-        .where(TrackSubject.academic_year_id == section.academic_year_id)
-        .where(TrackSubject.track == section.track)
-    )
-    q_track = where_tenant(q_track, TrackSubject, tenant_id)
-    track_rows = db.execute(q_track).scalars().all()
-    mandatory = [r for r in track_rows if not r.is_elective]
-    subject_ids: list[uuid.UUID] = [r.subject_id for r in mandatory]
+    # Curriculum (+ elective blocks). Prefer refactored curriculum_subjects with legacy fallback.
+    subject_ids: list[uuid.UUID] = []
+    if table_exists(db, "curriculum_subjects"):
+        q_curr = (
+            select(CurriculumSubject)
+            .where(CurriculumSubject.program_id == program_id)
+            .where(CurriculumSubject.academic_year_id == section.academic_year_id)
+            .where(CurriculumSubject.track == section.track)
+        )
+        q_curr = where_tenant(q_curr, CurriculumSubject, tenant_id)
+        curr_rows = db.execute(q_curr).scalars().all()
+        mandatory = [r for r in curr_rows if not bool(getattr(r, "is_elective", False))]
+        subject_ids = [r.subject_id for r in mandatory]
+    else:
+        q_track = (
+            select(TrackSubject)
+            .where(TrackSubject.program_id == program_id)
+            .where(TrackSubject.academic_year_id == section.academic_year_id)
+            .where(TrackSubject.track == section.track)
+        )
+        q_track = where_tenant(q_track, TrackSubject, tenant_id)
+        track_rows = db.execute(q_track).scalars().all()
+        mandatory = [r for r in track_rows if not bool(getattr(r, "is_elective", False))]
+        subject_ids = [r.subject_id for r in mandatory]
 
     # Add elective block subjects for this section (parallel electives).
     q_blocks = select(SectionElectiveBlock.block_id).where(SectionElectiveBlock.section_id == section.id)
@@ -1294,7 +1308,6 @@ def validate_timetable(
         if payload.academic_year_number is not None:
             q_ay = where_tenant(
                 select(AcademicYear)
-                .where(AcademicYear.program_id == program.id)
                 .where(AcademicYear.year_number == payload.academic_year_number),
                 AcademicYear,
                 tenant_id,
@@ -1488,6 +1501,37 @@ def validate_timetable(
         if is_transient_db_connectivity_error(exc):
             raise DatabaseUnavailableError("Database temporarily unavailable") from exc
         raise
+    except Exception as exc:
+        logger.exception(
+            "solver.validate_failed tenant_id=%s program_code=%s academic_year_number=%s error=%s",
+            str(tenant_id) if tenant_id is not None else "shared",
+            str(payload.program_code),
+            str(payload.academic_year_number),
+            str(exc),
+        )
+        return ValidateTimetableResponse(
+            status="INVALID",
+            errors=[
+                SolverConflict(
+                    severity="ERROR",
+                    conflict_type="VALIDATION_RUNTIME_ERROR",
+                    message="Validation failed due to an internal error.",
+                    metadata={
+                        "error": str(exc),
+                    },
+                )
+            ],
+            warnings=[],
+            capacity_issues=[
+                ValidationIssue(
+                    type="validation_failed",
+                    resource_type="SYSTEM",
+                    resource="solver.validate",
+                    suggestion="Check backend logs for stack trace and fix data/model mismatches.",
+                )
+            ],
+            summary={},
+        )
 
 
 @router.post("/generate-global", response_model=GenerateTimetableResponse)

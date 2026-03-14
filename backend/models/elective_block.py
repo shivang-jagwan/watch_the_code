@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
@@ -19,13 +19,4 @@ class ElectiveBlock(Base):
     name = Column(Text, nullable=False)
     code = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
-    # Maximum number of sections that can attend simultaneously (NULL = no limit).
-    max_parallel_sections = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-    __table_args__ = (
-        CheckConstraint(
-            "max_parallel_sections IS NULL OR max_parallel_sections >= 1",
-            name="ck_elective_blocks_max_parallel",
-        ),
-    )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+import logging
 
 from datetime import datetime, timedelta
 
@@ -60,6 +61,7 @@ from schemas.admin import (
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _get_academic_year(db: Session, year_number: int, *, tenant_id: uuid.UUID | None) -> AcademicYear:
@@ -1380,7 +1382,7 @@ def _build_elective_block_out(db: Session, *, block: ElectiveBlock, academic_yea
     subj_q = (
         select(ElectiveBlockSubject, Subject, Teacher)
         .join(Subject, Subject.id == ElectiveBlockSubject.subject_id)
-        .join(Teacher, Teacher.id == ElectiveBlockSubject.teacher_id)
+        .outerjoin(Teacher, Teacher.id == ElectiveBlockSubject.teacher_id)
         .where(ElectiveBlockSubject.block_id == block.id)
         .order_by(Subject.code.asc(), Teacher.code.asc())
     )
@@ -1396,14 +1398,24 @@ def _build_elective_block_out(db: Session, *, block: ElectiveBlock, academic_yea
     section_q = where_tenant(section_q, SectionElectiveBlock, tenant_id)
     section_rows = db.execute(section_q).all()
 
-    return ElectiveBlockOut(
-        id=block.id,
-        academic_year_number=int(academic_year_number),
-        name=block.name,
-        code=block.code,
-        is_active=bool(block.is_active),
-        max_parallel_sections=getattr(block, "max_parallel_sections", None),
-        subjects=[
+    subjects: list[ElectiveBlockSubjectOut] = []
+    for _ebs, subj, teacher in subj_rows:
+        if subj is None:
+            logger.warning(
+                "elective_blocks.orphan_subject block_id=%s assignment_id=%s",
+                str(block.id),
+                str(getattr(_ebs, "id", "")),
+            )
+            continue
+        if teacher is None:
+            logger.warning(
+                "elective_blocks.orphan_teacher block_id=%s assignment_id=%s subject_id=%s",
+                str(block.id),
+                str(getattr(_ebs, "id", "")),
+                str(getattr(subj, "id", "")),
+            )
+            continue
+        subjects.append(
             ElectiveBlockSubjectOut(
                 id=_ebs.id,
                 subject_id=subj.id,
@@ -1414,49 +1426,84 @@ def _build_elective_block_out(db: Session, *, block: ElectiveBlock, academic_yea
                 teacher_code=teacher.code,
                 teacher_name=teacher.full_name,
             )
-            for _ebs, subj, teacher in subj_rows
-        ],
+        )
+
+    created_at = getattr(block, "created_at", None) or datetime.utcnow()
+
+    return ElectiveBlockOut(
+        id=block.id,
+        academic_year_number=int(academic_year_number),
+        name=block.name,
+        code=block.code,
+        is_active=bool(block.is_active),
+        max_parallel_sections=getattr(block, "max_parallel_sections", None),
+        subjects=subjects,
         sections=[
             ElectiveBlockSectionOut(section_id=sec.id, section_code=sec.code, section_name=sec.name)
             for _seb, sec in section_rows
         ],
-        created_at=block.created_at.isoformat() if getattr(block, "created_at", None) is not None else "",
+        created_at=created_at,
     )
 
 
 @router.get("/elective-blocks", response_model=list[ElectiveBlockOut])
 def list_elective_blocks(
-    program_code: str = Query(min_length=1),
-    academic_year_number: int = Query(ge=1, le=4),
+    program_code: str | None = Query(default=None, min_length=1),
+    academic_year_number: int | None = Query(default=None, ge=1, le=4),
     _admin=Depends(require_admin),
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ):
-    q_program = where_tenant(select(Program).where(Program.code == program_code), Program, tenant_id)
-    program = db.execute(q_program).scalar_one_or_none()
-    if program is None:
-        return []
+    try:
+        if not program_code or academic_year_number is None:
+            logger.info(
+                "elective_blocks.list_missing_filters tenant_id=%s program_code=%s academic_year_number=%s",
+                str(tenant_id) if tenant_id is not None else "shared",
+                str(program_code),
+                str(academic_year_number),
+            )
+            return []
 
-    q_year = where_tenant(
-        select(AcademicYear).where(AcademicYear.year_number == int(academic_year_number)),
-        AcademicYear,
-        tenant_id,
-    )
-    year = db.execute(q_year).scalar_one_or_none()
-    if year is None:
-        return []
+        q_program = where_tenant(select(Program).where(Program.code == program_code), Program, tenant_id)
+        program = db.execute(q_program).scalar_one_or_none()
+        if program is None:
+            return []
 
-    q = (
-        select(ElectiveBlock)
-        .where(ElectiveBlock.program_id == program.id)
-        .where(ElectiveBlock.academic_year_id == year.id)
-        .order_by(ElectiveBlock.created_at.desc())
-    )
-    q = where_tenant(q, ElectiveBlock, tenant_id)
-    blocks = (
-        db.execute(q).scalars().all()
-    )
-    return [_build_elective_block_out(db, block=b, academic_year_number=academic_year_number) for b in blocks]
+        q_year = where_tenant(
+            select(AcademicYear).where(AcademicYear.year_number == int(academic_year_number)),
+            AcademicYear,
+            tenant_id,
+        )
+        year = db.execute(q_year).scalar_one_or_none()
+        if year is None:
+            return []
+
+        q = (
+            select(ElectiveBlock)
+            .where(ElectiveBlock.program_id == program.id)
+            .where(ElectiveBlock.academic_year_id == year.id)
+            .order_by(ElectiveBlock.created_at.desc())
+        )
+        q = where_tenant(q, ElectiveBlock, tenant_id)
+        blocks = db.execute(q).scalars().all()
+        return [_build_elective_block_out(db, block=b, academic_year_number=int(academic_year_number)) for b in blocks]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "elective_blocks.list_failed tenant_id=%s program_code=%s academic_year_number=%s error=%s",
+            str(tenant_id) if tenant_id is not None else "shared",
+            str(program_code),
+            str(academic_year_number),
+            str(exc),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "ELECTIVE_BLOCKS_LIST_FAILED",
+                "message": "Failed to load elective blocks.",
+            },
+        )
 
 
 @router.post("/elective-blocks", response_model=ElectiveBlockOut)
@@ -1476,8 +1523,9 @@ def create_elective_block(
         name=payload.name.strip(),
         code=(payload.code.strip() if payload.code else None),
         is_active=bool(payload.is_active),
-        max_parallel_sections=payload.max_parallel_sections,
     )
+    if hasattr(block, "max_parallel_sections"):
+        setattr(block, "max_parallel_sections", payload.max_parallel_sections)
     db.add(block)
     try:
         db.commit()
@@ -1523,7 +1571,7 @@ def update_elective_block(
         block.code = payload.code.strip() if payload.code else None
     if payload.is_active is not None:
         block.is_active = bool(payload.is_active)
-    if payload.max_parallel_sections is not None:
+    if payload.max_parallel_sections is not None and hasattr(block, "max_parallel_sections"):
         block.max_parallel_sections = payload.max_parallel_sections
 
     try:

@@ -343,6 +343,24 @@ def _load_elective_blocks(ctx: SolverContext) -> None:
             for subj_id, _tid in ctx.block_subject_pairs_by_block.get(bid, []):
                 ctx.elective_block_by_section_subject.setdefault((sid, subj_id), bid)
 
+    # Prevent double scheduling: subjects covered by elective blocks should not
+    # also be treated as normal section_required theory subjects.
+    for sid, bids in ctx.blocks_by_section.items():
+        block_subject_ids: set[Any] = set()
+        for bid in bids:
+            for subj_id, _tid in ctx.block_subject_pairs_by_block.get(bid, []):
+                block_subject_ids.add(subj_id)
+        if not block_subject_ids:
+            continue
+        existing = ctx.section_required.get(sid, [])
+        if not existing:
+            continue
+        ctx.section_required[sid] = [
+            (subj_id, sessions_override)
+            for subj_id, sessions_override in existing
+            if subj_id not in block_subject_ids
+        ]
+
 
 def _load_allowed_slots(ctx: SolverContext) -> None:
     db = ctx.db

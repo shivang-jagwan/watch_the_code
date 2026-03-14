@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from api.tenant import where_tenant
 from core.db import table_exists
 from models import (
-    Program,
     Section,
     Subject,
     Teacher,
@@ -24,6 +23,8 @@ from models import (
     CombinedGroup,
     CombinedGroupSection,
 )
+from models.curriculum_subject import CurriculumSubject
+from models.track_subject import TrackSubject
 
 from models.combined_subject_group import CombinedSubjectGroup
 from models.combined_subject_section import CombinedSubjectSection
@@ -54,6 +55,8 @@ def build_capacity_data(
     subject_by_id = {s.id: s for s in subjects}
 
     mapped_subject_ids_by_section: dict[Any, list[Any]] = defaultdict(list)
+    sessions_per_week_by_section_subject: dict[tuple[Any, Any], int] = {}
+    lab_block_by_section_subject: dict[tuple[Any, Any], int] = {}
     if section_ids:
         q_sec_subj = select(SectionSubject.section_id, SectionSubject.subject_id).where(
             SectionSubject.section_id.in_(section_ids)
@@ -61,6 +64,69 @@ def build_capacity_data(
         q_sec_subj = where_tenant(q_sec_subj, SectionSubject, tenant_id)
         for sec_id, subj_id in db.execute(q_sec_subj).all():
             mapped_subject_ids_by_section[sec_id].append(subj_id)
+
+    sections_by_id = {s.id: s for s in sections}
+
+    # Build curriculum lookups for refactored schema; fallback to legacy track_subjects.
+    curriculum_by_year_track_subject: dict[tuple[Any, str, Any], Any] = {}
+    if table_exists(db, "curriculum_subjects"):
+        year_ids = sorted({s.academic_year_id for s in sections if getattr(s, "academic_year_id", None) is not None})
+        q_curr = select(CurriculumSubject).where(CurriculumSubject.program_id == program_id)
+        if year_ids:
+            q_curr = q_curr.where(CurriculumSubject.academic_year_id.in_(year_ids))
+        q_curr = where_tenant(q_curr, CurriculumSubject, tenant_id)
+        for row in db.execute(q_curr).scalars().all():
+            curriculum_by_year_track_subject[(row.academic_year_id, str(row.track), row.subject_id)] = row
+
+        for section in sections:
+            sec_id = section.id
+            track = str(getattr(section, "track", ""))
+            year_id = getattr(section, "academic_year_id", None)
+
+            # If section has no explicit mapping, derive mandatory subjects from curriculum.
+            if not mapped_subject_ids_by_section.get(sec_id):
+                for (yid, trk, subj_id), row in curriculum_by_year_track_subject.items():
+                    if yid != year_id or trk != track or bool(getattr(row, "is_elective", False)):
+                        continue
+                    mapped_subject_ids_by_section[sec_id].append(subj_id)
+                    sessions_per_week_by_section_subject[(sec_id, subj_id)] = int(getattr(row, "sessions_per_week", 0) or 0)
+                    lab_block_by_section_subject[(sec_id, subj_id)] = int(getattr(row, "lab_block_size_slots", 1) or 1)
+
+            # Apply curriculum overrides even when section_subjects mapping exists.
+            for subj_id in mapped_subject_ids_by_section.get(sec_id, []):
+                row = curriculum_by_year_track_subject.get((year_id, track, subj_id))
+                if row is None:
+                    continue
+                sessions_per_week_by_section_subject[(sec_id, subj_id)] = int(getattr(row, "sessions_per_week", 0) or 0)
+                lab_block_by_section_subject[(sec_id, subj_id)] = int(getattr(row, "lab_block_size_slots", 1) or 1)
+    elif table_exists(db, "track_subjects"):
+        year_ids = sorted({s.academic_year_id for s in sections if getattr(s, "academic_year_id", None) is not None})
+        q_track = select(TrackSubject).where(TrackSubject.program_id == program_id)
+        if year_ids:
+            q_track = q_track.where(TrackSubject.academic_year_id.in_(year_ids))
+        q_track = where_tenant(q_track, TrackSubject, tenant_id)
+        track_rows = db.execute(q_track).scalars().all()
+        track_by_year_track: dict[tuple[Any, str], list[TrackSubject]] = defaultdict(list)
+        for row in track_rows:
+            track_by_year_track[(row.academic_year_id, str(row.track))].append(row)
+
+        for section in sections:
+            sec_id = section.id
+            year_id = getattr(section, "academic_year_id", None)
+            track = str(getattr(section, "track", ""))
+            rows = track_by_year_track.get((year_id, track), [])
+
+            if not mapped_subject_ids_by_section.get(sec_id):
+                for row in rows:
+                    if bool(getattr(row, "is_elective", False)):
+                        continue
+                    mapped_subject_ids_by_section[sec_id].append(row.subject_id)
+                    subj = subject_by_id.get(row.subject_id)
+                    fallback_sessions = int(getattr(subj, "sessions_per_week", 0) or 0)
+                    sessions_per_week_by_section_subject[(sec_id, row.subject_id)] = int(
+                        getattr(row, "sessions_override", None) if getattr(row, "sessions_override", None) is not None else fallback_sessions
+                    )
+                    lab_block_by_section_subject[(sec_id, row.subject_id)] = int(getattr(subj, "lab_block_size_slots", 1) or 1)
 
     # Assigned teacher per (section, subject)
     assigned_teacher_by_section_subject: dict[tuple[Any, Any], Any] = {}
@@ -159,6 +225,7 @@ def build_capacity_data(
 
     return {
         "sections": sections,
+        "sections_by_id": sections_by_id,
         "subjects_by_id": subject_by_id,
         "teachers_by_id": teacher_by_id,
         "assigned_teacher_by_section_subject": assigned_teacher_by_section_subject,
@@ -174,6 +241,8 @@ def build_capacity_data(
         "group_subject": filtered_group_subject,
         "active_days": active_days,
         "mapped_subject_ids_by_section": mapped_subject_ids_by_section,
+        "sessions_per_week_by_section_subject": sessions_per_week_by_section_subject,
+        "lab_block_by_section_subject": lab_block_by_section_subject,
         "allowed_rooms_by_subject": dict(allowed_rooms_by_subject),
     }
 
@@ -191,12 +260,37 @@ def analyze_capacity(data: dict[str, Any], debug: bool = False) -> dict[str, Any
     slot_by_day_index: dict[tuple[int, int], Any] = dict(data.get("slot_by_day_index") or {})
     active_days: list[int] = list(data.get("active_days") or [])
     mapped_subject_ids_by_section: dict[Any, list[Any]] = dict(data.get("mapped_subject_ids_by_section") or {})
+    sessions_per_week_by_section_subject: dict[tuple[Any, Any], int] = dict(
+        data.get("sessions_per_week_by_section_subject") or {}
+    )
+    lab_block_by_section_subject: dict[tuple[Any, Any], int] = dict(data.get("lab_block_by_section_subject") or {})
     assigned_teacher_by_section_subject: dict[tuple[Any, Any], Any] = dict(data.get("assigned_teacher_by_section_subject") or {})
     fixed_entries: list[Any] = list(data.get("fixed_entries") or [])
     special_allotments: list[Any] = list(data.get("special_allotments") or [])
     windows: list[Any] = list(data.get("windows") or [])
     group_sections: dict[Any, list[Any]] = dict(data.get("group_sections") or {})
     group_subject: dict[Any, Any] = dict(data.get("group_subject") or {})
+
+    def _slots_for_pair(sec_id: Any, subj_id: Any, subj: Any) -> int:
+        sessions = int(
+            sessions_per_week_by_section_subject.get(
+                (sec_id, subj_id),
+                getattr(subj, "sessions_per_week", 0) or 0,
+            )
+            or 0
+        )
+        if str(getattr(subj, "subject_type", "THEORY")) == "LAB":
+            block = int(
+                lab_block_by_section_subject.get(
+                    (sec_id, subj_id),
+                    getattr(subj, "lab_block_size_slots", 1) or 1,
+                )
+                or 1
+            )
+            if block < 1:
+                block = 1
+            return sessions * block
+        return sessions
 
     # Build window slot sets per section and lock counts per day
     window_slot_ids_by_section: dict[Any, set[Any]] = defaultdict(set)
@@ -237,10 +331,9 @@ def analyze_capacity(data: dict[str, Any], debug: bool = False) -> dict[str, Any
             subj = subject_by_id.get(subj_id)
             if subj is None:
                 continue
-            spw = int(getattr(subj, "sessions_per_week", 0) or 0)
-            if spw <= 0:
+            slots_needed = int(_slots_for_pair(sec_id, subj_id, subj))
+            if slots_needed <= 0:
                 continue
-            slots_needed = _slots_for_subject(subj, spw)
             required_by_subject[subj_id] += int(slots_needed)
             required_by_section[sec_id] += int(slots_needed)
             rt = "LAB" if str(getattr(subj, "subject_type", "THEORY")) == "LAB" else "THEORY"
@@ -274,17 +367,19 @@ def analyze_capacity(data: dict[str, Any], debug: bool = False) -> dict[str, Any
                 assigned_tid = None
         if assigned_tid is None:
             continue
-        spw = int(getattr(subj, "sessions_per_week", 0) or 0)
-        if spw <= 0:
+        # For combined groups, per-section overrides should be aligned; use first section.
+        ref_sid = sec_ids[0] if sec_ids else None
+        slots_needed = int(_slots_for_pair(ref_sid, subj_id, subj)) if ref_sid is not None else 0
+        if slots_needed <= 0:
             continue
-        required_by_teacher[assigned_tid] += int(spw)
+        required_by_teacher[assigned_tid] += int(slots_needed)
         teacher_contrib[assigned_tid].append(
             {
                 "source": "COMBINED_GROUP",
                 "group_id": str(gid),
                 "subject_code": getattr(subj, "code", None),
                 "sections": [getattr(section_by_id.get(sid), "code", str(sid)) for sid in sec_ids],
-                "slots": int(spw),
+                "slots": int(slots_needed),
             }
         )
         counted_combined_groups.add(gid)
@@ -307,10 +402,9 @@ def analyze_capacity(data: dict[str, Any], debug: bool = False) -> dict[str, Any
             tid = assigned_teacher_by_section_subject.get((sec_id, subj_id))
             if tid is None:
                 continue
-            spw = int(getattr(subj, "sessions_per_week", 0) or 0)
-            if spw <= 0:
+            slots_needed = int(_slots_for_pair(sec_id, subj_id, subj))
+            if slots_needed <= 0:
                 continue
-            slots_needed = _slots_for_subject(subj, spw)
             required_by_teacher[tid] += int(slots_needed)
             teacher_contrib[tid].append(
                 {

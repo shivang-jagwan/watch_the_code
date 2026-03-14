@@ -4,12 +4,16 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 import uuid
+import logging
 
 from core.security import decode_token
 from core.config import settings
 from core.db import get_db
 from core.tenancy import set_current_tenant_id
 from models.user import User
+
+
+logger = logging.getLogger(__name__)
 
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -41,14 +45,22 @@ def get_current_user(
         return cached
 
     bearer_token, cookie_token = _extract_tokens(request, creds)
-    if not bearer_token and not cookie_token:
+    auth_header_present = bool(request.headers.get("authorization"))
+    logger.debug(
+        "auth.check header_present=%s bearer_present=%s cookie_present=%s path=%s",
+        auth_header_present,
+        bool(bearer_token),
+        bool(cookie_token),
+        request.url.path,
+    )
+    if not bearer_token:
+        logger.debug("auth.missing_bearer path=%s", request.url.path)
         raise HTTPException(status_code=401, detail="NOT_AUTHENTICATED")
 
-    # Prefer bearer token, but fall back to cookie token if bearer is stale/invalid.
+    # Protected API routes require a Bearer token.
     payload = _decode_payload(bearer_token)
     if payload is None:
-        payload = _decode_payload(cookie_token)
-    if payload is None:
+        logger.debug("auth.token_invalid path=%s", request.url.path)
         raise HTTPException(status_code=401, detail="INVALID_TOKEN")
 
     user_id = payload.get("sub")
@@ -71,8 +83,21 @@ def get_current_user(
         token_tenant_id = payload.get("tenant_id")
         user_tenant_id = getattr(user, "tenant_id", None)
         if not token_tenant_id or user_tenant_id is None:
+            logger.debug(
+                "auth.tenant_missing token_tenant_present=%s user_tenant_present=%s path=%s",
+                bool(token_tenant_id),
+                user_tenant_id is not None,
+                request.url.path,
+            )
             raise HTTPException(status_code=401, detail="INVALID_TOKEN")
         if str(user_tenant_id) != str(token_tenant_id):
+            logger.warning(
+                "auth.tenant_mismatch user_id=%s token_tenant_id=%s user_tenant_id=%s path=%s",
+                str(user.id),
+                str(token_tenant_id),
+                str(user_tenant_id),
+                request.url.path,
+            )
             raise HTTPException(status_code=401, detail="INVALID_TOKEN")
 
     # Always set the tenant context once the user is authenticated.

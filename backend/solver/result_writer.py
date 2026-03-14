@@ -13,6 +13,7 @@ Extracts lines ~1775-2091 from the original _solve_program:
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from typing import Any
 
 from ortools.sat.python import cp_model
@@ -493,7 +494,32 @@ def _emit_block_batch_occurrence(ctx: SolverContext, block_id: Any, batch_idx: i
 
     from solver.room_assigner import _sid, _rid
 
-    for subj_id, teacher_id in pairs:
+    # Assign each section in the batch to a single eligible (subject, teacher)
+    # pair to avoid duplicate section-slot entries.
+    sections_by_pair: dict[tuple[Any, Any], list[Any]] = defaultdict(list)
+    for sec_id in sec_ids:
+        eligible_pairs = [
+            (subj_id, teacher_id)
+            for subj_id, teacher_id in pairs
+            if ctx.assigned_teacher_by_section_subject.get((sec_id, subj_id)) == teacher_id
+        ]
+
+        # Backward-compatible fallback: if no exact teacher match is found,
+        # allow any assigned subject in this section.
+        if not eligible_pairs:
+            eligible_pairs = [
+                (subj_id, teacher_id)
+                for subj_id, teacher_id in pairs
+                if ctx.assigned_teacher_by_section_subject.get((sec_id, subj_id)) is not None
+            ]
+
+        if not eligible_pairs:
+            continue
+
+        chosen_pair = sorted(eligible_pairs, key=lambda p: (str(p[0]), str(p[1])))[0]
+        sections_by_pair[chosen_pair].append(sec_id)
+
+    for (subj_id, teacher_id), pair_sections in sections_by_pair.items():
         forced = ctx.forced_room_by_block_batch_subject_slot.get((block_id, int(batch_idx), subj_id, slot_id))
         if forced is not None:
             sid = _sid(slot_id)
@@ -538,7 +564,7 @@ def _emit_block_batch_occurrence(ctx: SolverContext, block_id: Any, batch_idx: i
                 )
             )
 
-        for sec_id in sec_ids:
+        for sec_id in pair_sections:
             _make_entry(
                 ctx,
                 tenant_id=tenant_id,

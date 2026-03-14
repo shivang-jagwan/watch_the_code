@@ -122,6 +122,16 @@ def _new_db() -> Session:
     return SessionLocal()
 
 
+def _event_token(entry: dict[str, Any]) -> str:
+    """Normalize timetable rows to one occupancy unit.
+
+    Combined classes are persisted as one row per section but represent one
+    real teacher/room occupancy in a slot, so they must collapse to a single key.
+    """
+    combined_id = entry.get("combined_class_id")
+    return str(combined_id) if combined_id else str(entry["id"])
+
+
 # ---------------------------------------------------------------------------
 # Seeder — creates all required entities
 # ---------------------------------------------------------------------------
@@ -734,11 +744,14 @@ class TestTeacherConflict:
         run_id = _STATE.run_id
         rows = db.execute(
             text("""
-                SELECT teacher_id, slot_id, count(*) AS cnt
+                SELECT
+                    teacher_id,
+                    slot_id,
+                    count(DISTINCT COALESCE(combined_class_id::text, id::text)) AS cnt
                 FROM timetable_entries
                 WHERE run_id = :run_id
                 GROUP BY teacher_id, slot_id
-                HAVING count(*) > 1
+                HAVING count(DISTINCT COALESCE(combined_class_id::text, id::text)) > 1
             """),
             {"run_id": str(run_id)},
         ).all()
@@ -748,13 +761,11 @@ class TestTeacherConflict:
 
     def test_teacher_conflict_detailed(self, run_entries: list) -> None:
         """Python-level cross-check: no (teacher, day, slot) appears twice."""
-        seen: set[tuple] = set()
-        conflicts: list[tuple] = []
+        teacher_slot_events: dict[tuple, set[str]] = defaultdict(set)
         for e in run_entries:
             key = (e["teacher_id"], e["day_of_week"], e["slot_index"])
-            if key in seen:
-                conflicts.append(key)
-            seen.add(key)
+            teacher_slot_events[key].add(_event_token(e))
+        conflicts = [key for key, events in teacher_slot_events.items() if len(events) > 1]
         assert len(conflicts) == 0, f"Teacher slot conflicts: {conflicts}"
 
 
@@ -1092,24 +1103,25 @@ class TestRoomDoubleBooking:
         run_id = _STATE.run_id
         rows = db.execute(
             text("""
-                SELECT room_id, slot_id, count(*) AS cnt
+                SELECT
+                    room_id,
+                    slot_id,
+                    count(DISTINCT COALESCE(combined_class_id::text, id::text)) AS cnt
                 FROM timetable_entries
                 WHERE run_id = :run_id
                 GROUP BY room_id, slot_id
-                HAVING count(*) > 1
+                HAVING count(DISTINCT COALESCE(combined_class_id::text, id::text)) > 1
             """),
             {"run_id": str(run_id)},
         ).all()
         assert len(rows) == 0, f"Room double-booking detected: {rows}"
 
     def test_room_conflict_detailed(self, run_entries: list) -> None:
-        seen: set[tuple] = set()
-        conflicts: list[tuple] = []
+        room_slot_events: dict[tuple, set[str]] = defaultdict(set)
         for e in run_entries:
             key = (e["room_id"], e["day_of_week"], e["slot_index"])
-            if key in seen:
-                conflicts.append(key)
-            seen.add(key)
+            room_slot_events[key].add(_event_token(e))
+        conflicts = [key for key, events in room_slot_events.items() if len(events) > 1]
         assert len(conflicts) == 0, f"Room slot conflicts: {conflicts}"
 
 
@@ -1151,12 +1163,13 @@ class TestResultValidationSummary:
     def test_no_overlapping_classes_any_dimension(self, run_entries: list) -> None:
         """Combined check: no (section, slot), (teacher, slot), or (room, slot) conflicts."""
         section_slots: set[tuple] = set()
-        teacher_slots: set[tuple] = set()
-        room_slots: set[tuple] = set()
+        teacher_slots: dict[tuple, set[str]] = defaultdict(set)
+        room_slots: dict[tuple, set[str]] = defaultdict(set)
         all_conflicts: list[str] = []
 
         for e in run_entries:
             day_slot = (e["day_of_week"], e["slot_index"])
+            event_token = _event_token(e)
 
             sk = (e["section_id"], *day_slot)
             if sk in section_slots:
@@ -1164,14 +1177,17 @@ class TestResultValidationSummary:
             section_slots.add(sk)
 
             tk = (e["teacher_id"], *day_slot)
-            if tk in teacher_slots:
-                all_conflicts.append(f"Teacher double-booking: {tk}")
-            teacher_slots.add(tk)
+            teacher_slots[tk].add(event_token)
 
             rk = (e["room_id"], *day_slot)
-            if rk in room_slots:
+            room_slots[rk].add(event_token)
+
+        for tk, events in teacher_slots.items():
+            if len(events) > 1:
+                all_conflicts.append(f"Teacher double-booking: {tk}")
+        for rk, events in room_slots.items():
+            if len(events) > 1:
                 all_conflicts.append(f"Room double-booking: {rk}")
-            room_slots.add(rk)
 
         assert len(all_conflicts) == 0, "\n".join(all_conflicts)
 

@@ -45,8 +45,16 @@ def _validate_track(track: str) -> str:
     return t
 
 
-def _ensure_unique_section_code(db: Session, *, program_id, code: str, exclude_section_id: uuid.UUID | None) -> None:
+def _ensure_unique_section_code(
+    db: Session,
+    *,
+    program_id,
+    code: str,
+    exclude_section_id: uuid.UUID | None,
+    tenant_id: uuid.UUID | None,
+) -> None:
     q = select(Section.id).where(Section.program_id == program_id).where(Section.code == code)
+    q = where_tenant(q, Section, tenant_id)
     if exclude_section_id is not None:
         q = q.where(Section.id != exclude_section_id)
     if db.execute(q.limit(1)).first() is not None:
@@ -159,7 +167,13 @@ def create_section(
     ay = _get_or_create_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id)
 
     track = _validate_track(payload.track)
-    _ensure_unique_section_code(db, program_id=program.id, code=payload.code, exclude_section_id=None)
+    _ensure_unique_section_code(
+        db,
+        program_id=program.id,
+        code=payload.code,
+        exclude_section_id=None,
+        tenant_id=tenant_id,
+    )
 
     section = Section(
         tenant_id=tenant_id,
@@ -205,6 +219,7 @@ def update_section(
             program_id=section.program_id,
             code=str(updates["code"]),
             exclude_section_id=section_id,
+            tenant_id=tenant_id,
         )
     for k, v in updates.items():
         setattr(section, k, v)

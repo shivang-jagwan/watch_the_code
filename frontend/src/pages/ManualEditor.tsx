@@ -231,6 +231,8 @@ function EditModal({
 }) {
   const [teacherId, setTeacherId] = React.useState(entry.teacher_id)
   const [roomId, setRoomId] = React.useState(entry.room_id)
+  const teacherSelectId = React.useId()
+  const roomSelectId = React.useId()
 
   return (
     <div
@@ -260,9 +262,14 @@ function EditModal({
 
         <div className="space-y-3">
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-700">Teacher</label>
+            <label htmlFor={teacherSelectId} className="mb-1 block text-xs font-medium text-slate-700">
+              Teacher
+            </label>
             <select
+              id={teacherSelectId}
               className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              aria-label="Teacher"
+              title="Teacher"
               value={teacherId}
               onChange={(e) => setTeacherId(e.target.value)}
             >
@@ -274,9 +281,14 @@ function EditModal({
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-xs font-medium text-slate-700">Room</label>
+            <label htmlFor={roomSelectId} className="mb-1 block text-xs font-medium text-slate-700">
+              Room
+            </label>
             <select
+              id={roomSelectId}
               className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              aria-label="Room"
+              title="Room"
               value={roomId}
               onChange={(e) => setRoomId(e.target.value)}
             >
@@ -615,6 +627,8 @@ export function ManualEditor() {
               className="rounded-lg border border-slate-300 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
               defaultValue={sourceRunId}
               onChange={(e) => handleRunChange(e.target.value)}
+              aria-label="Select timetable run"
+              title="Select timetable run"
             >
               {runs.map((r) => (
                 <option key={r.id} value={r.id}>
@@ -672,6 +686,8 @@ export function ManualEditor() {
               value={selectedDay}
               onChange={(e) => setSelectedDay(Number(e.target.value))}
               className="rounded border border-slate-300 px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              aria-label="Selected day"
+              title="Selected day"
             >
               {days.map((d) => (
                 <option key={d} value={d}>
@@ -726,7 +742,7 @@ export function ManualEditor() {
           <div className="flex flex-1 overflow-hidden">
             {/* Grid */}
             <div className="flex-1 overflow-auto">
-              <table className="border-collapse text-xs" style={{ minWidth: 'max-content' }}>
+              <table className="min-w-max border-collapse text-xs">
                 <thead>
                   {/* Day names row */}
                   <tr>
@@ -752,8 +768,7 @@ export function ManualEditor() {
                       (slotsByDay.get(day) ?? []).map((slot) => (
                         <th
                           key={slot.id}
-                          className="border border-slate-200 bg-slate-50 px-1 py-1 text-center font-medium text-slate-500"
-                          style={{ minWidth: 84, width: 84 }}
+                          className="w-[84px] min-w-[84px] border border-slate-200 bg-slate-50 px-1 py-1 text-center font-medium text-slate-500"
                         >
                           <div>P{slot.slot_index + 1}</div>
                           <div className="font-normal text-[10px] text-slate-400">

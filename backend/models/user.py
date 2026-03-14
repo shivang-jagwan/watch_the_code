@@ -19,6 +19,8 @@ class User(Base):
         nullable=False,
         index=True,
     )
+    # Some deployments still enforce NOT NULL on users.name.
+    name = Column(String(255), nullable=False, default="")
     username = Column(String(100), nullable=False)
     password_hash = Column(Text, nullable=False)
     role = Column(String(20), nullable=False, default="ADMIN")

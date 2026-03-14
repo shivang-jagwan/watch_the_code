@@ -333,7 +333,7 @@ export function SubjectEditModal({ open, subject, loading, onClose, onSave }: Su
                         className={
                           'flex cursor-pointer select-none items-center gap-2 rounded-xl border px-3 py-2 text-xs transition-colors ' +
                           (allowedRoomIds.has(r.id)
-                            ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                            ? 'border-emerald-500 bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300'
                             : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300')
                         }
                       >
@@ -346,19 +346,29 @@ export function SubjectEditModal({ open, subject, loading, onClose, onSave }: Su
                         />
                         <span className="font-medium">{r.code}</span>
                         <span className="text-slate-500">{r.room_type}</span>
-                        {r.is_special && (
-                          <span className="ml-auto rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
-                            Special
-                          </span>
-                        )}
+                        <div className="ml-auto flex items-center gap-1">
+                          {allowedRoomIds.has(r.id) && (
+                            <span
+                              className="rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                              title="Selected"
+                              aria-label="Selected"
+                            >
+                              &#10003;
+                            </span>
+                          )}
+                          {r.is_special && (
+                            <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                              Special
+                            </span>
+                          )}
+                        </div>
                       </label>
                     ))}
                 </div>
               )}
               {allowedRoomIds.size > 0 && (
-                <p className="mt-2 text-xs text-emerald-700 font-medium">
-                  {allowedRoomIds.size} room{allowedRoomIds.size > 1 ? 's' : ''} selected — solver
-                  will only assign this subject to these rooms.
+                <p className="mt-2 text-xs font-medium text-emerald-700">
+                  {allowedRoomIds.size} room{allowedRoomIds.size > 1 ? 's' : ''} selected — highlighted in green.
                 </p>
               )}
             </div>

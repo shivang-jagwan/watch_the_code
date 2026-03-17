@@ -3,20 +3,10 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, Text, UniqueConstraint
-from sqlalchemy.dialects.postgresql import ENUM, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from models.base import Base
-
-
-SECTION_TRACK = ENUM(
-    "CORE",
-    "CYBER",
-    "AI_DS",
-    "AI_ML",
-    name="section_track",
-    create_type=False,
-)
 
 
 class Section(Base):
@@ -29,7 +19,7 @@ class Section(Base):
     code = Column(Text, nullable=False)
     name = Column(Text, nullable=False)
     strength = Column(Integer, nullable=False, default=0)
-    track = Column(SECTION_TRACK, nullable=False, default="CORE")
+    track = Column(Text, nullable=False, default="CORE")
     is_active = Column(Boolean, nullable=False, default=True)
     # Hard cap on classes per day for this section (NULL = no cap beyond time window).
     max_daily_slots = Column(Integer, nullable=True)

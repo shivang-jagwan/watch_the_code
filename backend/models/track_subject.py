@@ -2,21 +2,11 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer
-from sqlalchemy.dialects.postgresql import ENUM, UUID
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, Text
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from models.base import Base
-
-
-SECTION_TRACK = ENUM(
-    "CORE",
-    "CYBER",
-    "AI_DS",
-    "AI_ML",
-    name="section_track",
-    create_type=False,
-)
 
 
 class TrackSubject(Base):
@@ -26,7 +16,7 @@ class TrackSubject(Base):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     program_id = Column(UUID(as_uuid=True), ForeignKey("programs.id", ondelete="CASCADE"), nullable=False)
     academic_year_id = Column(UUID(as_uuid=True), ForeignKey("academic_years.id", ondelete="CASCADE"), nullable=False)
-    track = Column(SECTION_TRACK, nullable=False)
+    track = Column(Text, nullable=False)
     subject_id = Column(UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False)
     is_elective = Column(Boolean, nullable=False, default=False)
     sessions_override = Column(Integer, nullable=True)

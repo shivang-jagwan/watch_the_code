@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -41,7 +42,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-ALLOWED_TRACKS = {"CORE", "CYBER", "AI_DS", "AI_ML"}
+TRACK_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
 
 
 def _section_usage_flags(db: Session, *, section_id: uuid.UUID, tenant_id: uuid.UUID | None) -> dict[str, bool]:
@@ -96,8 +97,10 @@ def _section_usage_flags(db: Session, *, section_id: uuid.UUID, tenant_id: uuid.
 
 
 def _validate_track(track: str) -> str:
-    t = str(track).upper().strip()
-    if t not in ALLOWED_TRACKS:
+    t = str(track).upper().strip().replace(" ", "_")
+    t = re.sub(r"[^A-Z0-9_]", "_", t)
+    t = re.sub(r"_+", "_", t).strip("_")
+    if not t or not TRACK_PATTERN.match(t):
         raise HTTPException(status_code=400, detail="INVALID_TRACK")
     return t
 

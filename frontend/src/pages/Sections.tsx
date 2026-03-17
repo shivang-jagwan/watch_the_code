@@ -15,11 +15,17 @@ import {
 } from '../api/sections'
 import { listTimeSlots, type TimeSlot } from '../api/solver'
 
-const TRACKS = [
-  { label: 'CORE', value: 'CORE' },
-  { label: 'AI/DS', value: 'AI_DS' },
-  { label: 'AI/ML', value: 'AI_ML' },
-]
+const DEFAULT_TRACKS = ['CORE', 'CYBER', 'AI_DS', 'AI_ML']
+
+function normalizeTrack(input: string): string {
+  return String(input)
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
 
 export function Sections() {
   const { programCode, academicYearNumber } = useLayoutContext()
@@ -52,6 +58,17 @@ export function Sections() {
     track: 'CORE',
     is_active: true,
   })
+  const [newTrack, setNewTrack] = React.useState('')
+
+  const trackOptions = React.useMemo(() => {
+    const set = new Set<string>(DEFAULT_TRACKS)
+    for (const s of items) set.add(normalizeTrack(s.track))
+    if (form.track) set.add(normalizeTrack(form.track))
+    return Array.from(set)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b))
+      .map((t) => ({ value: t, label: t }))
+  }, [items, form.track])
 
   function showToast(message: string, ms = 2500) {
     setToast(message)
@@ -130,6 +147,11 @@ export function Sections() {
       showToast('Select a program first', 3000)
       return
     }
+    const track = normalizeTrack(form.track)
+    if (!track) {
+      showToast('Track is required', 3000)
+      return
+    }
     setLoading(true)
     try {
       await createSection({
@@ -138,7 +160,7 @@ export function Sections() {
         code: form.code.trim(),
         name: form.name.trim(),
         strength: Number(form.strength),
-        track: form.track,
+        track,
         is_active: Boolean(form.is_active),
       })
       showToast('Section saved')
@@ -467,8 +489,31 @@ export function Sections() {
                   className="mt-1 text-sm"
                   value={form.track}
                   onValueChange={(v) => setForm((f) => ({ ...f, track: v }))}
-                  options={TRACKS.map((t) => ({ value: t.value, label: t.label }))}
+                  options={trackOptions}
                 />
+                <div className="mt-2 flex gap-2">
+                  <input
+                    className="input-premium w-full text-sm"
+                    value={newTrack}
+                    onChange={(e) => setNewTrack(e.target.value)}
+                    placeholder="Add new track (e.g., CYBER_SECURITY)"
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs font-semibold"
+                    onClick={() => {
+                      const t = normalizeTrack(newTrack)
+                      if (!t) {
+                        showToast('Enter a valid track', 3000)
+                        return
+                      }
+                      setForm((f) => ({ ...f, track: t }))
+                      setNewTrack('')
+                    }}
+                  >
+                    Use
+                  </button>
+                </div>
               </div>
             </div>
 

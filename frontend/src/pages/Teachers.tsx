@@ -268,7 +268,15 @@ export function Teachers() {
       showToast('Teacher deleted')
       await refresh()
     } catch (e: any) {
-      showToast(`Delete failed: ${String(e?.message ?? e)}`, 3500)
+      const msg = String(e?.message ?? e)
+      if (msg.includes('DELETE_BLOCKED')) {
+        showToast(
+          'Cannot delete teacher: used in timetable or assignments. Remove linked entries first.',
+          4500,
+        )
+      } else {
+        showToast(`Delete failed: ${msg}`, 3500)
+      }
     } finally {
       setLoading(false)
     }

@@ -7,6 +7,7 @@ import { listSubjects } from '../api/subjects'
 import { listTeachers } from '../api/teachers'
 import { listRooms } from '../api/rooms'
 import { listElectiveBlocks } from '../api/admin'
+import { clearTimetables } from '../api/admin'
 import { getRun, listRuns, listTimeSlots, type RunDetail, type RunSummary } from '../api/solver'
 
 export function Dashboard() {
@@ -14,6 +15,8 @@ export function Dashboard() {
 
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string>('')
+  const [actionMessage, setActionMessage] = React.useState<string>('')
+  const [clearingAll, setClearingAll] = React.useState(false)
 
   const [sectionsTotal, setSectionsTotal] = React.useState<number>(0)
   const [sectionsActive, setSectionsActive] = React.useState<number>(0)
@@ -41,6 +44,32 @@ export function Dashboard() {
 
   function fmtShortId(id: string) {
     return (id || '').split('-')[0] ?? id
+  }
+
+  async function onClearAllData() {
+    const ok = window.confirm(
+      'This will clear ALL generated timetable entries and conflicts for all years. Continue?',
+    )
+    if (!ok) return
+    const confirmWord = window.prompt('Type DELETE to confirm full clear')
+    if (confirmWord !== 'DELETE') {
+      setActionMessage('Clear cancelled')
+      return
+    }
+
+    setClearingAll(true)
+    try {
+      const result = await clearTimetables({ confirm: 'DELETE' })
+      if (result.ok) {
+        setActionMessage('All timetable data cleared successfully')
+      } else {
+        setActionMessage(result.message || 'Clear failed')
+      }
+    } catch (e: any) {
+      setActionMessage(`Clear failed: ${String(e?.message ?? e)}`)
+    } finally {
+      setClearingAll(false)
+    }
   }
 
   function HealthBadge({ ok }: { ok: boolean }) {
@@ -176,6 +205,9 @@ export function Dashboard() {
       {error ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">{error}</div>
       ) : null}
+      {actionMessage ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{actionMessage}</div>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
@@ -228,6 +260,14 @@ export function Dashboard() {
             <Link className="btn-secondary text-sm" to="/timetable">View Timetable</Link>
             <Link className="btn-secondary text-sm" to="/conflicts">Conflicts</Link>
             <Link className="btn-secondary text-sm" to="/manual-editor">Manual Editor</Link>
+            <button
+              type="button"
+              className="btn-danger text-sm font-semibold disabled:opacity-50"
+              onClick={onClearAllData}
+              disabled={clearingAll}
+            >
+              {clearingAll ? 'Clearing…' : 'Clear All Data'}
+            </button>
           </div>
         </div>
 

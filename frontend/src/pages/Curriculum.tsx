@@ -5,12 +5,17 @@ import { createTrackSubject, deleteTrackSubject, listTrackSubjects, TrackSubject
 import { listSubjects, Subject } from '../api/subjects'
 import { PremiumSelect } from '../components/PremiumSelect'
 
-const TRACKS = [
-  { label: 'CORE', value: 'CORE' },
-  { label: 'CYBER', value: 'CYBER' },
-  { label: 'AI_DS', value: 'AI_DS' },
-  { label: 'AI_ML', value: 'AI_ML' },
-]
+const DEFAULT_TRACKS = ['CORE', 'CYBER', 'AI_DS', 'AI_ML']
+
+function normalizeTrack(input: string): string {
+  return String(input)
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
 
 export function Curriculum() {
   const { programCode, academicYearNumber } = useLayoutContext()
@@ -26,6 +31,17 @@ export function Curriculum() {
     is_elective: false,
     sessions_override: '',
   })
+  const [newTrack, setNewTrack] = React.useState('')
+
+  const trackOptions = React.useMemo(() => {
+    const set = new Set<string>(DEFAULT_TRACKS)
+    for (const r of rows) set.add(normalizeTrack(r.track))
+    if (form.track) set.add(normalizeTrack(form.track))
+    return Array.from(set)
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b))
+      .map((t) => ({ value: t, label: t }))
+  }, [rows, form.track])
 
   function showToast(message: string, ms = 2500) {
     setToast(message)
@@ -68,12 +84,17 @@ export function Curriculum() {
       showToast('Select a program first', 3000)
       return
     }
+    const track = normalizeTrack(form.track)
+    if (!track) {
+      showToast('Track is required', 3000)
+      return
+    }
     setLoading(true)
     try {
       await createTrackSubject({
         program_code: pc,
         academic_year_number: academicYearNumber,
-        track: form.track,
+        track,
         subject_code: form.subject_code,
         is_elective: Boolean(form.is_elective),
         sessions_override: form.sessions_override === '' ? null : Number(form.sessions_override),
@@ -143,8 +164,31 @@ export function Curriculum() {
                   className="mt-1 text-sm"
                   value={form.track}
                   onValueChange={(v) => setForm((f) => ({ ...f, track: v }))}
-                  options={TRACKS.map((t) => ({ value: t.value, label: t.label }))}
+                  options={trackOptions}
                 />
+                <div className="mt-2 flex gap-2">
+                  <input
+                    className="input-premium w-full text-sm"
+                    value={newTrack}
+                    onChange={(e) => setNewTrack(e.target.value)}
+                    placeholder="Add new track (e.g., CYBER_SECURITY)"
+                  />
+                  <button
+                    type="button"
+                    className="btn-secondary text-xs font-semibold"
+                    onClick={() => {
+                      const t = normalizeTrack(newTrack)
+                      if (!t) {
+                        showToast('Enter a valid track', 3000)
+                        return
+                      }
+                      setForm((f) => ({ ...f, track: t }))
+                      setNewTrack('')
+                    }}
+                  >
+                    Use
+                  </button>
+                </div>
               </div>
               <div>
                 <label htmlFor="cur_sub" className="text-xs font-medium text-slate-600">

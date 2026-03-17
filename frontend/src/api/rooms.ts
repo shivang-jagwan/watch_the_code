@@ -9,6 +9,7 @@ export type Room = {
   is_active: boolean
   is_special: boolean
   special_note?: string | null
+  exclusive_subject_id?: string | null
   created_at: string
 }
 
@@ -20,6 +21,17 @@ export type RoomCreate = {
   is_active: boolean
   is_special?: boolean
   special_note?: string | null
+}
+
+export type RoomExclusiveSubjectResponse = {
+  room_id: string
+  subject_id: string | null
+}
+
+export type RoomExclusiveSubjectOption = {
+  id: string
+  code: string
+  name: string
 }
 
 export type RoomPut = RoomCreate
@@ -52,4 +64,22 @@ export async function putRoomWithForce(id: string, payload: RoomPut, force: bool
     method: 'PUT',
     body: JSON.stringify(payload),
   })
+}
+
+export async function getRoomExclusiveSubject(id: string): Promise<RoomExclusiveSubjectResponse> {
+  return apiFetch<RoomExclusiveSubjectResponse>(`/api/rooms/${id}/exclusive-subject`)
+}
+
+export async function putRoomExclusiveSubject(
+  id: string,
+  subjectId: string | null,
+): Promise<RoomExclusiveSubjectResponse> {
+  return apiFetch<RoomExclusiveSubjectResponse>(`/api/rooms/${id}/exclusive-subject`, {
+    method: 'PUT',
+    body: JSON.stringify({ subject_id: subjectId }),
+  })
+}
+
+export async function listRoomExclusiveSubjectOptions(): Promise<RoomExclusiveSubjectOption[]> {
+  return apiFetch<RoomExclusiveSubjectOption[]>('/api/rooms/exclusive-subject-options')
 }

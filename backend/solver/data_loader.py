@@ -274,12 +274,15 @@ def _load_subject_allowed_rooms(ctx: SolverContext) -> None:
 
     subject_ids = [s.id for s in ctx.subjects]
     q = (
-        select(SubjectAllowedRoom.subject_id, SubjectAllowedRoom.room_id)
+        select(SubjectAllowedRoom.subject_id, SubjectAllowedRoom.room_id, SubjectAllowedRoom.is_exclusive)
         .where(SubjectAllowedRoom.subject_id.in_(subject_ids))
     )
     q = where_tenant(q, SubjectAllowedRoom, tenant_id)
-    for subj_id, room_id in db.execute(q).all():
+    for subj_id, room_id, is_exclusive in db.execute(q).all():
         ctx.allowed_rooms_by_subject.setdefault(subj_id, []).append(room_id)
+        if bool(is_exclusive):
+            ctx.exclusive_rooms_by_subject[subj_id].add(room_id)
+            ctx.exclusive_subject_by_room.setdefault(room_id, subj_id)
 
 
 def _load_elective_blocks(ctx: SolverContext) -> None:

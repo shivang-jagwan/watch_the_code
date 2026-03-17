@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SectionBase(BaseModel):
@@ -15,7 +15,6 @@ class SectionBase(BaseModel):
     track: str = Field(default='CORE', min_length=1)
     is_active: bool = True
     max_daily_slots: int | None = None
-    pass
 
 
 class SectionCreate(SectionBase):
@@ -55,6 +54,4 @@ class SectionOut(BaseModel):
     is_active: bool
     max_daily_slots: int | None
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

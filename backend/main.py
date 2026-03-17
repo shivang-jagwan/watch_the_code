@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -129,9 +130,28 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 def create_app() -> FastAPI:
     setup_logging(environment=settings.environment)
     is_production = settings.environment.lower() == "production"
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # Best-effort: don't block app boot if DB is temporarily down.
+        try:
+            _apply_startup_schema_recovery()
+        except Exception:
+            logger.exception("Startup schema recovery failed")
+
+        try:
+            from core.bootstrap import bootstrap_auth
+
+            bootstrap_auth()
+        except Exception:
+            logger.exception("Auth bootstrap failed")
+
+        yield
+
     app = FastAPI(
         title="Timetable Generator API",
         version="0.1.0",
+        lifespan=lifespan,
         docs_url=None if is_production else "/docs",
         redoc_url=None if is_production else "/redoc",
         openapi_url=None if is_production else "/openapi.json",
@@ -244,21 +264,6 @@ def create_app() -> FastAPI:
             db_status = "down"
 
         return {"app": "ok", "database": db_status}
-
-    @app.on_event("startup")
-    def _startup_bootstrap() -> None:
-        # Best-effort: don't block app boot if DB is temporarily down.
-        try:
-            _apply_startup_schema_recovery()
-        except Exception:
-            logger.exception("Startup schema recovery failed")
-
-        try:
-            from core.bootstrap import bootstrap_auth
-
-            bootstrap_auth()
-        except Exception:
-            logger.exception("Auth bootstrap failed")
 
     app.include_router(api_router, prefix="/api")
     return app

@@ -12,12 +12,18 @@ from api.deps import get_tenant_id, require_admin
 from api.tenant import get_by_id, where_tenant
 from core.db import get_db
 from models.academic_year import AcademicYear
+from models.combined_group_section import CombinedGroupSection
+from models.combined_subject_section import CombinedSubjectSection
+from models.fixed_timetable_entry import FixedTimetableEntry
 from models.program import Program
 from models.room import Room
 from models.section import Section
+from models.section_elective_block import SectionElectiveBlock
 from models.section_time_window import SectionTimeWindow
 from models.section_subject import SectionSubject
+from models.special_allotment import SpecialAllotment
 from models.subject import Subject
+from models.timetable_entry import TimetableEntry
 from models.time_slot import TimeSlot
 from schemas.section import SectionCreate, SectionOut, SectionPut, SectionStrengthPut, SectionUpdate
 from schemas.section_subject import SectionSubjectCreate
@@ -36,6 +42,57 @@ logger = logging.getLogger(__name__)
 
 
 ALLOWED_TRACKS = {"CORE", "CYBER", "AI_DS", "AI_ML"}
+
+
+def _section_usage_flags(db: Session, *, section_id: uuid.UUID, tenant_id: uuid.UUID | None) -> dict[str, bool]:
+    used_in_timetable = db.execute(
+        where_tenant(
+            select(TimetableEntry.id).where(TimetableEntry.section_id == section_id).limit(1),
+            TimetableEntry,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_fixed = db.execute(
+        where_tenant(
+            select(FixedTimetableEntry.id).where(FixedTimetableEntry.section_id == section_id).where(FixedTimetableEntry.is_active.is_(True)).limit(1),
+            FixedTimetableEntry,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_special = db.execute(
+        where_tenant(
+            select(SpecialAllotment.id).where(SpecialAllotment.section_id == section_id).where(SpecialAllotment.is_active.is_(True)).limit(1),
+            SpecialAllotment,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_combined = db.execute(
+        where_tenant(
+            select(CombinedGroupSection.id).where(CombinedGroupSection.section_id == section_id).limit(1),
+            CombinedGroupSection,
+            tenant_id,
+        )
+    ).first() is not None or db.execute(
+        where_tenant(
+            select(CombinedSubjectSection.id).where(CombinedSubjectSection.section_id == section_id).limit(1),
+            CombinedSubjectSection,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_elective = db.execute(
+        where_tenant(
+            select(SectionElectiveBlock.id).where(SectionElectiveBlock.section_id == section_id).limit(1),
+            SectionElectiveBlock,
+            tenant_id,
+        )
+    ).first() is not None
+    return {
+        "used_in_timetable_entries": used_in_timetable,
+        "used_in_fixed_entries": used_in_fixed,
+        "used_in_special_allotments": used_in_special,
+        "used_in_combined_groups": used_in_combined,
+        "used_in_elective_blocks": used_in_elective,
+    }
 
 
 def _validate_track(track: str) -> str:
@@ -133,7 +190,7 @@ def list_sections(
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ) -> list[SectionOut]:
-    q = where_tenant(select(Section), Section, tenant_id).order_by(Section.code.asc())
+    q = where_tenant(select(Section).where(Section.is_active.is_(True)), Section, tenant_id).order_by(Section.code.asc())
 
     if program_code is not None:
         q_program = where_tenant(select(Program).where(Program.code == program_code), Program, tenant_id)
@@ -370,7 +427,24 @@ def delete_section(
     section = get_by_id(db, Section, section_id, tenant_id)
     if section is None:
         raise HTTPException(status_code=404, detail="SECTION_NOT_FOUND")
-    db.delete(section)
+
+    flags = _section_usage_flags(db, section_id=section_id, tenant_id=tenant_id)
+    if any(flags.values()):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DELETE_BLOCKED",
+                "error": "Cannot delete section",
+                "reason": "Used in timetable or assignments",
+                "errors": [
+                    "Cannot delete section",
+                    "Used in timetable or assignments",
+                    f"Usage: {flags}",
+                ],
+            },
+        )
+
+    section.is_active = False
     db.commit()
     return {"ok": True}
 

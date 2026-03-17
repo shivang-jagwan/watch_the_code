@@ -221,10 +221,13 @@ def _ensure_incremental_columns(conn) -> None:
             tenant_id  UUID        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
             subject_id UUID        NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
             room_id    UUID        NOT NULL REFERENCES rooms(id)    ON DELETE CASCADE,
+            is_exclusive BOOLEAN   NOT NULL DEFAULT FALSE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         );
         """,
+        "ALTER TABLE subject_allowed_rooms ADD COLUMN IF NOT EXISTS is_exclusive BOOLEAN NOT NULL DEFAULT FALSE;",
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_subject_allowed_rooms_tenant_subject_room ON subject_allowed_rooms (tenant_id, subject_id, room_id);",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_subject_allowed_rooms_exclusive_room ON subject_allowed_rooms (tenant_id, room_id) WHERE is_exclusive IS TRUE;",
         "CREATE INDEX IF NOT EXISTS ix_subject_allowed_rooms_subject ON subject_allowed_rooms (subject_id);",
         "CREATE INDEX IF NOT EXISTS ix_subject_allowed_rooms_tenant  ON subject_allowed_rooms (tenant_id);",
     ]

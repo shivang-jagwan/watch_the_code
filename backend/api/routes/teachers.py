@@ -10,8 +10,13 @@ from sqlalchemy.orm import Session
 from api.deps import get_tenant_id, require_admin
 from api.tenant import get_by_id, where_tenant
 from core.db import get_db
+from models.combined_group import CombinedGroup
+from models.elective_block_subject import ElectiveBlockSubject
+from models.fixed_timetable_entry import FixedTimetableEntry
+from models.special_allotment import SpecialAllotment
 from models.teacher import Teacher
 from models.teacher_time_window import TeacherTimeWindow
+from models.timetable_entry import TimetableEntry
 from schemas.teacher import TeacherCreate, TeacherOut, TeacherPut, TeacherUpdate
 from schemas.teacher_time_window import (
     ListTeacherTimeWindowsResponse,
@@ -22,6 +27,51 @@ from schemas.teacher_time_window import (
 
 
 router = APIRouter()
+
+
+def _teacher_usage_flags(db: Session, *, teacher_id: uuid.UUID, tenant_id: uuid.UUID | None) -> dict[str, bool]:
+    used_in_timetable = db.execute(
+        where_tenant(
+            select(TimetableEntry.id).where(TimetableEntry.teacher_id == teacher_id).limit(1),
+            TimetableEntry,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_fixed = db.execute(
+        where_tenant(
+            select(FixedTimetableEntry.id).where(FixedTimetableEntry.teacher_id == teacher_id).where(FixedTimetableEntry.is_active.is_(True)).limit(1),
+            FixedTimetableEntry,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_special = db.execute(
+        where_tenant(
+            select(SpecialAllotment.id).where(SpecialAllotment.teacher_id == teacher_id).where(SpecialAllotment.is_active.is_(True)).limit(1),
+            SpecialAllotment,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_combined = db.execute(
+        where_tenant(
+            select(CombinedGroup.id).where(CombinedGroup.teacher_id == teacher_id).limit(1),
+            CombinedGroup,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_elective = db.execute(
+        where_tenant(
+            select(ElectiveBlockSubject.id).where(ElectiveBlockSubject.teacher_id == teacher_id).limit(1),
+            ElectiveBlockSubject,
+            tenant_id,
+        )
+    ).first() is not None
+    return {
+        "used_in_timetable_entries": used_in_timetable,
+        "used_in_fixed_entries": used_in_fixed,
+        "used_in_special_allotments": used_in_special,
+        "used_in_combined_groups": used_in_combined,
+        "used_in_elective_blocks": used_in_elective,
+    }
 
 
 def _validate_teacher_constraints(
@@ -62,7 +112,7 @@ def list_teachers(
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ) -> list[TeacherOut]:
-    q = where_tenant(select(Teacher), Teacher, tenant_id).order_by(Teacher.full_name.asc())
+    q = where_tenant(select(Teacher).where(Teacher.is_active.is_(True)), Teacher, tenant_id).order_by(Teacher.full_name.asc())
     rows = db.execute(q).scalars().all()
     return rows
 
@@ -179,7 +229,24 @@ def delete_teacher(
     teacher = get_by_id(db, Teacher, teacher_id, tenant_id)
     if teacher is None:
         raise HTTPException(status_code=404, detail="TEACHER_NOT_FOUND")
-    db.delete(teacher)
+
+    flags = _teacher_usage_flags(db, teacher_id=teacher_id, tenant_id=tenant_id)
+    if any(flags.values()):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DELETE_BLOCKED",
+                "error": "Cannot delete teacher",
+                "reason": "Used in timetable or assignments",
+                "errors": [
+                    "Cannot delete teacher",
+                    "Used in timetable or assignments",
+                    f"Usage: {flags}",
+                ],
+            },
+        )
+
+    teacher.is_active = False
     db.commit()
     return {"ok": True}
 

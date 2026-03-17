@@ -11,10 +11,16 @@ from api.deps import get_tenant_id, require_admin
 from api.tenant import get_by_id, where_tenant
 from core.db import get_db
 from models.academic_year import AcademicYear
+from models.combined_group import CombinedGroup
+from models.combined_group_section import CombinedGroupSection
+from models.elective_block_subject import ElectiveBlockSubject
+from models.fixed_timetable_entry import FixedTimetableEntry
 from models.program import Program
 from models.room import Room
+from models.special_allotment import SpecialAllotment
 from models.subject import Subject
 from models.subject_allowed_room import SubjectAllowedRoom
+from models.timetable_entry import TimetableEntry
 from schemas.subject import (
     ListSubjectAllowedRoomsResponse,
     SubjectAllowedRoomOut,
@@ -26,6 +32,57 @@ from schemas.subject import (
 
 
 router = APIRouter()
+
+
+def _subject_usage_flags(db: Session, *, subject_id: uuid.UUID, tenant_id: uuid.UUID | None) -> dict[str, bool]:
+    used_in_timetable = db.execute(
+        where_tenant(
+            select(TimetableEntry.id).where(TimetableEntry.subject_id == subject_id).limit(1),
+            TimetableEntry,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_fixed = db.execute(
+        where_tenant(
+            select(FixedTimetableEntry.id).where(FixedTimetableEntry.subject_id == subject_id).where(FixedTimetableEntry.is_active.is_(True)).limit(1),
+            FixedTimetableEntry,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_special = db.execute(
+        where_tenant(
+            select(SpecialAllotment.id).where(SpecialAllotment.subject_id == subject_id).where(SpecialAllotment.is_active.is_(True)).limit(1),
+            SpecialAllotment,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_combined = db.execute(
+        where_tenant(
+            select(CombinedGroup.id).where(CombinedGroup.subject_id == subject_id).limit(1),
+            CombinedGroup,
+            tenant_id,
+        )
+    ).first() is not None or db.execute(
+        where_tenant(
+            select(CombinedGroupSection.id).where(CombinedGroupSection.subject_id == subject_id).limit(1),
+            CombinedGroupSection,
+            tenant_id,
+        )
+    ).first() is not None
+    used_in_elective = db.execute(
+        where_tenant(
+            select(ElectiveBlockSubject.id).where(ElectiveBlockSubject.subject_id == subject_id).limit(1),
+            ElectiveBlockSubject,
+            tenant_id,
+        )
+    ).first() is not None
+    return {
+        "used_in_timetable_entries": used_in_timetable,
+        "used_in_fixed_entries": used_in_fixed,
+        "used_in_special_allotments": used_in_special,
+        "used_in_combined_groups": used_in_combined,
+        "used_in_elective_blocks": used_in_elective,
+    }
 
 
 def _validate_subject_constraints(
@@ -121,7 +178,7 @@ def list_subjects(
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ) -> list[SubjectOut]:
-    q = where_tenant(select(Subject), Subject, tenant_id).order_by(Subject.code.asc())
+    q = where_tenant(select(Subject).where(Subject.is_active.is_(True)), Subject, tenant_id).order_by(Subject.code.asc())
 
     if program_code is not None:
         # For list views we prefer a clean empty result over a hard 404
@@ -272,7 +329,24 @@ def delete_subject(
     subject = get_by_id(db, Subject, subject_id, tenant_id)
     if subject is None:
         raise HTTPException(status_code=404, detail="SUBJECT_NOT_FOUND")
-    db.delete(subject)
+
+    flags = _subject_usage_flags(db, subject_id=subject_id, tenant_id=tenant_id)
+    if any(flags.values()):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DELETE_BLOCKED",
+                "error": "Cannot delete subject",
+                "reason": "Used in timetable or assignments",
+                "errors": [
+                    "Cannot delete subject",
+                    "Used in timetable or assignments",
+                    f"Usage: {flags}",
+                ],
+            },
+        )
+
+    subject.is_active = False
     db.commit()
     return {"ok": True}
 
@@ -296,9 +370,11 @@ def list_subject_allowed_rooms(
     q = select(SubjectAllowedRoom).where(SubjectAllowedRoom.subject_id == subject_id)
     q = where_tenant(q, SubjectAllowedRoom, tenant_id)
     rows = db.execute(q).scalars().all()
+    exclusive_room_ids = [r.room_id for r in rows if bool(getattr(r, "is_exclusive", False))]
     return ListSubjectAllowedRoomsResponse(
         subject_id=subject_id,
         room_ids=[r.room_id for r in rows],
+        exclusive_room_ids=exclusive_room_ids,
     )
 
 
@@ -306,6 +382,7 @@ def list_subject_allowed_rooms(
 def add_subject_allowed_room(
     subject_id: uuid.UUID,
     room_id: uuid.UUID,
+    is_exclusive: bool = Query(default=False),
     _admin=Depends(require_admin),
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
@@ -317,12 +394,46 @@ def add_subject_allowed_room(
     if room is None:
         raise HTTPException(status_code=404, detail="ROOM_NOT_FOUND")
 
-    row = SubjectAllowedRoom(
-        tenant_id=tenant_id,
-        subject_id=subject_id,
-        room_id=room_id,
+    if bool(is_exclusive):
+        q_conflict = where_tenant(
+            select(SubjectAllowedRoom)
+            .where(SubjectAllowedRoom.room_id == room_id)
+            .where(SubjectAllowedRoom.is_exclusive.is_(True))
+            .where(SubjectAllowedRoom.subject_id != subject_id)
+            .limit(1),
+            SubjectAllowedRoom,
+            tenant_id,
+        )
+        conflict = db.execute(q_conflict).scalar_one_or_none()
+        if conflict is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "ROOM_CONFLICT",
+                    "error": "ROOM_CONFLICT",
+                    "message": f"Room {room.code} assigned exclusively to multiple subjects",
+                },
+            )
+
+    q_existing = where_tenant(
+        select(SubjectAllowedRoom)
+        .where(SubjectAllowedRoom.subject_id == subject_id)
+        .where(SubjectAllowedRoom.room_id == room_id)
+        .limit(1),
+        SubjectAllowedRoom,
+        tenant_id,
     )
-    db.add(row)
+    row = db.execute(q_existing).scalar_one_or_none()
+    if row is None:
+        row = SubjectAllowedRoom(
+            tenant_id=tenant_id,
+            subject_id=subject_id,
+            room_id=room_id,
+            is_exclusive=bool(is_exclusive),
+        )
+        db.add(row)
+    else:
+        row.is_exclusive = bool(is_exclusive)
     try:
         db.commit()
     except IntegrityError:

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 from api.deps import get_tenant_id, require_admin
 from api.tenant import get_by_id, where_tenant
@@ -14,6 +15,8 @@ from core.db import get_db
 from models.fixed_timetable_entry import FixedTimetableEntry
 from models.room import Room
 from models.special_allotment import SpecialAllotment
+from models.subject import Subject
+from models.subject_allowed_room import SubjectAllowedRoom
 from models.timetable_entry import TimetableEntry
 from schemas.room import RoomCreate, RoomOut, RoomUpdate
 
@@ -22,6 +25,21 @@ logger = logging.getLogger(__name__)
 
 
 router = APIRouter()
+
+
+class RoomExclusiveSubjectUpdate(BaseModel):
+    subject_id: uuid.UUID | None = None
+
+
+class RoomExclusiveSubjectResponse(BaseModel):
+    room_id: uuid.UUID
+    subject_id: uuid.UUID | None = None
+
+
+class RoomExclusiveSubjectOption(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
 
 
 def _ensure_unique_room_code(
@@ -77,8 +95,37 @@ def list_rooms(
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ) -> list[RoomOut]:
-    q = where_tenant(select(Room), Room, tenant_id).order_by(Room.code.asc())
-    return db.execute(q).scalars().all()
+    q = where_tenant(select(Room).where(Room.is_active.is_(True)), Room, tenant_id).order_by(Room.code.asc())
+    rooms = db.execute(q).scalars().all()
+    if not rooms:
+        return []
+
+    room_ids = [r.id for r in rooms]
+    q_ex = where_tenant(
+        select(SubjectAllowedRoom.room_id, SubjectAllowedRoom.subject_id)
+        .where(SubjectAllowedRoom.room_id.in_(room_ids))
+        .where(SubjectAllowedRoom.is_exclusive.is_(True)),
+        SubjectAllowedRoom,
+        tenant_id,
+    )
+    exclusive_subject_by_room: dict[uuid.UUID, uuid.UUID] = {}
+    for room_id, subject_id in db.execute(q_ex).all():
+        exclusive_subject_by_room.setdefault(room_id, subject_id)
+
+    for room in rooms:
+        setattr(room, "exclusive_subject_id", exclusive_subject_by_room.get(room.id))
+    return rooms
+
+
+@router.get("/exclusive-subject-options", response_model=list[RoomExclusiveSubjectOption])
+def list_room_exclusive_subject_options(
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> list[RoomExclusiveSubjectOption]:
+    q = where_tenant(select(Subject).where(Subject.is_active.is_(True)), Subject, tenant_id).order_by(Subject.code.asc())
+    rows = db.execute(q).scalars().all()
+    return [RoomExclusiveSubjectOption(id=s.id, code=str(s.code), name=str(s.name)) for s in rows]
 
 
 @router.post("/", response_model=RoomOut)
@@ -281,6 +328,105 @@ def delete_room(
     room = get_by_id(db, Room, room_id, tenant_id)
     if room is None:
         raise HTTPException(status_code=404, detail="ROOM_NOT_FOUND")
-    db.delete(room)
+
+    flags = _room_in_use_flags(db, room_id=room_id, tenant_id=tenant_id)
+    flags["used_in_combined_groups"] = False
+    flags["used_in_elective_blocks"] = False
+    if any(flags.values()):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DELETE_BLOCKED",
+                "error": "Cannot delete room",
+                "reason": "Used in timetable or assignments",
+                "errors": [
+                    "Cannot delete room",
+                    "Used in timetable or assignments",
+                    f"Usage: {flags}",
+                ],
+            },
+        )
+
+    q_room_links = where_tenant(select(SubjectAllowedRoom).where(SubjectAllowedRoom.room_id == room_id), SubjectAllowedRoom, tenant_id)
+    for row in db.execute(q_room_links).scalars().all():
+        row.is_exclusive = False
+
+    room.is_active = False
     db.commit()
     return {"ok": True}
+
+
+@router.get("/{room_id}/exclusive-subject", response_model=RoomExclusiveSubjectResponse)
+def get_room_exclusive_subject(
+    room_id: uuid.UUID,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> RoomExclusiveSubjectResponse:
+    room = get_by_id(db, Room, room_id, tenant_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="ROOM_NOT_FOUND")
+
+    q = where_tenant(
+        select(SubjectAllowedRoom.subject_id)
+        .where(SubjectAllowedRoom.room_id == room_id)
+        .where(SubjectAllowedRoom.is_exclusive.is_(True))
+        .limit(1),
+        SubjectAllowedRoom,
+        tenant_id,
+    )
+    row = db.execute(q).first()
+    return RoomExclusiveSubjectResponse(room_id=room_id, subject_id=(row[0] if row else None))
+
+
+@router.put("/{room_id}/exclusive-subject", response_model=RoomExclusiveSubjectResponse)
+def put_room_exclusive_subject(
+    room_id: uuid.UUID,
+    payload: RoomExclusiveSubjectUpdate,
+    _admin=Depends(require_admin),
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID | None = Depends(get_tenant_id),
+) -> RoomExclusiveSubjectResponse:
+    room = get_by_id(db, Room, room_id, tenant_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="ROOM_NOT_FOUND")
+
+    subject_id = payload.subject_id
+    if subject_id is not None:
+        subj = get_by_id(db, Subject, subject_id, tenant_id)
+        if subj is None:
+            raise HTTPException(status_code=404, detail="SUBJECT_NOT_FOUND")
+
+    q_existing_ex = where_tenant(
+        select(SubjectAllowedRoom)
+        .where(SubjectAllowedRoom.room_id == room_id)
+        .where(SubjectAllowedRoom.is_exclusive.is_(True)),
+        SubjectAllowedRoom,
+        tenant_id,
+    )
+    for row in db.execute(q_existing_ex).scalars().all():
+        row.is_exclusive = False
+
+    if subject_id is not None:
+        q_link = where_tenant(
+            select(SubjectAllowedRoom)
+            .where(SubjectAllowedRoom.room_id == room_id)
+            .where(SubjectAllowedRoom.subject_id == subject_id)
+            .limit(1),
+            SubjectAllowedRoom,
+            tenant_id,
+        )
+        link = db.execute(q_link).scalar_one_or_none()
+        if link is None:
+            link = SubjectAllowedRoom(
+                tenant_id=tenant_id,
+                subject_id=subject_id,
+                room_id=room_id,
+                is_exclusive=True,
+            )
+            db.add(link)
+        else:
+            link.is_exclusive = True
+
+    db.commit()
+    return RoomExclusiveSubjectResponse(room_id=room_id, subject_id=subject_id)

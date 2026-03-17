@@ -1312,3 +1312,87 @@ class TestResultValidationSummary:
         print("=" * 60)
         # This always passes — it's just for visibility
         assert True
+
+class TestDeleteAndExclusiveGuards:
+    """Acceptance tests for delete safety and exclusive room ownership."""
+
+    def test_room_exclusive_mapping_single_subject_only(self, client: TestClient, auth_headers: dict) -> None:
+        room_id = str(_STATE.room_ids["LAB-1"])
+        subject_ai = str(_STATE.subject_ids["AI"])
+        subject_os = str(_STATE.subject_ids["OS"])
+
+        # First exclusive assignment should succeed.
+        r1 = client.post(
+            f"/api/subjects/{subject_ai}/allowed-rooms?room_id={room_id}&is_exclusive=true",
+            headers=auth_headers,
+        )
+        assert r1.status_code in (200, 201), r1.text
+
+        # Second subject attempting same exclusive room must fail with ROOM_CONFLICT.
+        r2 = client.post(
+            f"/api/subjects/{subject_os}/allowed-rooms?room_id={room_id}&is_exclusive=true",
+            headers=auth_headers,
+        )
+        assert r2.status_code == 409, r2.text
+        body = r2.json().get("detail") or {}
+        assert body.get("error") == "ROOM_CONFLICT"
+
+    def test_room_exclusive_subject_endpoint(self, client: TestClient, auth_headers: dict) -> None:
+        room_id = str(_STATE.room_ids["LAB-2"])
+        subject_id = str(_STATE.subject_ids["DBMS_LAB"])
+
+        put_resp = client.put(
+            f"/api/rooms/{room_id}/exclusive-subject",
+            headers=auth_headers,
+            json={"subject_id": subject_id},
+        )
+        assert put_resp.status_code == 200, put_resp.text
+        assert put_resp.json().get("subject_id") == subject_id
+
+        get_resp = client.get(f"/api/rooms/{room_id}/exclusive-subject", headers=auth_headers)
+        assert get_resp.status_code == 200, get_resp.text
+        assert get_resp.json().get("subject_id") == subject_id
+
+    def test_delete_subject_used_in_timetable_is_blocked(
+        self,
+        client: TestClient,
+        auth_headers: dict,
+        solve_result: dict,
+    ) -> None:
+        # OS is actively used by seeded assignments and solved timetable.
+        subject_id = str(_STATE.subject_ids["OS"])
+        resp = client.delete(f"/api/subjects/{subject_id}", headers=auth_headers)
+        assert resp.status_code == 409, resp.text
+        detail = resp.json().get("detail") or {}
+        assert detail.get("error") == "Cannot delete subject"
+        assert detail.get("reason") == "Used in timetable or assignments"
+
+    def test_delete_unused_subject_succeeds_and_hides_from_list(self, client: TestClient, auth_headers: dict) -> None:
+        payload = {
+            "program_code": PROGRAM_CODE,
+            "academic_year_number": YEAR_NUMBER,
+            "code": f"UNUSED_{uuid.uuid4().hex[:6].upper()}",
+            "name": "Unused Subject",
+            "subject_type": "THEORY",
+            "sessions_per_week": 1,
+            "max_per_day": 1,
+            "lab_block_size_slots": 1,
+            "is_active": True,
+            "credits": 0,
+        }
+        create_resp = client.post("/api/subjects/", headers=auth_headers, json=payload)
+        assert create_resp.status_code == 200, create_resp.text
+        created = create_resp.json()
+        subject_id = str(created["id"])
+
+        delete_resp = client.delete(f"/api/subjects/{subject_id}", headers=auth_headers)
+        assert delete_resp.status_code == 200, delete_resp.text
+        assert delete_resp.json().get("ok") is True
+
+        list_resp = client.get(
+            f"/api/subjects/?program_code={PROGRAM_CODE}&academic_year_number={YEAR_NUMBER}",
+            headers=auth_headers,
+        )
+        assert list_resp.status_code == 200, list_resp.text
+        subject_ids = {str(s["id"]) for s in list_resp.json()}
+        assert subject_id not in subject_ids

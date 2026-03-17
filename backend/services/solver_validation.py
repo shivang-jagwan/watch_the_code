@@ -21,6 +21,7 @@ from models.section_subject import SectionSubject
 from models.section_break import SectionBreak
 from models.section_time_window import SectionTimeWindow
 from models.subject import Subject
+from models.subject_allowed_room import SubjectAllowedRoom
 from models.teacher import Teacher
 from models.teacher_subject_section import TeacherSubjectSection
 from models.time_slot import TimeSlot
@@ -151,6 +152,61 @@ def validate_prereqs(
                 message="No time slots configured. Populate time_slots before generating timetables.",
             )
         )
+
+    # Exclusive subject-room validation.
+    if table_exists(db, "subject_allowed_rooms"):
+        q_active_subjects = where_tenant(
+            select(Subject.id)
+            .where(Subject.is_active.is_(True))
+            .where(Subject.program_id == program_id),
+            Subject,
+            tenant_id,
+        )
+        if solve_year_ids:
+            q_active_subjects = q_active_subjects.where(Subject.academic_year_id.in_(solve_year_ids))
+        active_subject_ids = set(db.execute(q_active_subjects).scalars().all())
+
+        q_exclusive = where_tenant(
+            select(SubjectAllowedRoom.room_id, SubjectAllowedRoom.subject_id)
+            .where(SubjectAllowedRoom.is_exclusive.is_(True)),
+            SubjectAllowedRoom,
+            tenant_id,
+        )
+        subjects_by_room: dict[Any, set[Any]] = defaultdict(set)
+        for room_id, subject_id in db.execute(q_exclusive).all():
+            if subject_id not in active_subject_ids:
+                continue
+            subjects_by_room[room_id].add(subject_id)
+
+        if subjects_by_room:
+            room_ids = list(subjects_by_room.keys())
+            room_rows = db.execute(
+                where_tenant(
+                    select(Room.id, Room.code, Room.is_active).where(Room.id.in_(room_ids)),
+                    Room,
+                    tenant_id,
+                )
+            ).all()
+            room_code_by_id = {rid: code for rid, code, _active in room_rows}
+            room_active_by_id = {rid: bool(active) for rid, _code, active in room_rows}
+            for room_id, subject_ids in subjects_by_room.items():
+                if not room_active_by_id.get(room_id, False):
+                    continue
+                if len(subject_ids) <= 1:
+                    continue
+                room_code = str(room_code_by_id.get(room_id) or room_id)
+                conflicts.append(
+                    ValidationConflict(
+                        conflict_type="ROOM_CONFLICT",
+                        message=f"Room {room_code} assigned exclusively to multiple subjects",
+                        room_id=room_id,
+                        metadata={
+                            "error": "ROOM_CONFLICT",
+                            "room_code": room_code,
+                            "subject_count": len(subject_ids),
+                        },
+                    )
+                )
 
     # Section time windows must exist for all active days and use valid slot indices.
     # Active days = days that have at least one time slot.

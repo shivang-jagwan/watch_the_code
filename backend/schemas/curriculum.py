@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TrackSubjectBase(BaseModel):
@@ -34,9 +34,7 @@ class TrackSubjectOut(BaseModel):
     is_elective: bool
     sessions_override: int | None
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Curriculum Subjects ────────────────────────────────────────────────────────
@@ -76,6 +74,4 @@ class CurriculumSubjectOut(BaseModel):
     lab_block_size_slots: int
     is_elective: bool
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

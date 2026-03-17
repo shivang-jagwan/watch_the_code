@@ -158,6 +158,7 @@ export function SubjectEditModal({ open, subject, loading, onClose, onSave }: Su
       max_per_day: Number(current.max_per_day),
       lab_block_size_slots: Number(current.lab_block_size_slots),
       is_active: Boolean(current.is_active),
+      credits: Number(subject!.credits ?? 0),
     }
 
     await onSave(payload)

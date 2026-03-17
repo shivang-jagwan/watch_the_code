@@ -1,6 +1,16 @@
 import React from 'react'
 import { Toast } from '../components/Toast'
-import { createRoom, deleteRoom, listRooms, putRoom, putRoomWithForce, Room } from '../api/rooms'
+import {
+  createRoom,
+  deleteRoom,
+  listRooms,
+  listRoomExclusiveSubjectOptions,
+  putRoom,
+  putRoomExclusiveSubject,
+  putRoomWithForce,
+  Room,
+  RoomExclusiveSubjectOption,
+} from '../api/rooms'
 import { RoomEditModal } from '../components/RoomEditModal'
 import { PremiumSelect } from '../components/PremiumSelect'
 
@@ -14,6 +24,7 @@ export function Rooms() {
   const [toast, setToast] = React.useState('')
   const [loading, setLoading] = React.useState(false)
   const [items, setItems] = React.useState<Room[]>([])
+  const [subjectOptions, setSubjectOptions] = React.useState<RoomExclusiveSubjectOption[]>([])
   const [query, setQuery] = React.useState('')
 
   const [editOpen, setEditOpen] = React.useState(false)
@@ -27,6 +38,8 @@ export function Rooms() {
     is_active: true,
     is_special: false,
     special_note: '',
+    is_exclusive_room: false,
+    exclusive_subject_id: '',
   })
 
   function showToast(message: string, ms = 2500) {
@@ -37,8 +50,12 @@ export function Rooms() {
   async function refresh() {
     setLoading(true)
     try {
-      const data = await listRooms()
+      const [data, options] = await Promise.all([
+        listRooms(),
+        listRoomExclusiveSubjectOptions().catch(() => [] as RoomExclusiveSubjectOption[]),
+      ])
       setItems(data)
+      setSubjectOptions(options)
     } catch (e: any) {
       showToast(`Load failed: ${String(e?.message ?? e)}`, 3500)
     } finally {
@@ -53,7 +70,7 @@ export function Rooms() {
   async function onCreate() {
     setLoading(true)
     try {
-      await createRoom({
+      const created = await createRoom({
         code: form.code.trim(),
         name: form.name.trim(),
         room_type: form.room_type,
@@ -62,8 +79,12 @@ export function Rooms() {
         is_special: Boolean(form.is_special),
         special_note: form.special_note.trim() ? form.special_note.trim() : null,
       })
+      await putRoomExclusiveSubject(
+        created.id,
+        form.is_exclusive_room ? form.exclusive_subject_id || null : null,
+      )
       showToast('Room saved')
-      setForm((f) => ({ ...f, code: '', name: '', special_note: '' }))
+      setForm((f) => ({ ...f, code: '', name: '', special_note: '', is_exclusive_room: false, exclusive_subject_id: '' }))
       await refresh()
     } catch (e: any) {
       showToast(`Save failed: ${String(e?.message ?? e)}`, 3500)
@@ -96,7 +117,7 @@ export function Rooms() {
     setEditRoom(null)
   }
 
-  async function onSaveEdit(payload: any) {
+  async function onSaveEdit(payload: any, exclusiveSubjectId: string | null) {
     if (!editRoom) return
     setLoading(true)
     try {
@@ -124,6 +145,7 @@ export function Rooms() {
           throw e
         }
       }
+      await putRoomExclusiveSubject(editRoom.id, exclusiveSubjectId)
       showToast('Room updated')
       closeEdit()
       await refresh()
@@ -147,6 +169,7 @@ export function Rooms() {
       <RoomEditModal
         open={editOpen}
         room={editRoom}
+        subjects={subjectOptions}
         loading={loading}
         onClose={closeEdit}
         onSave={onSaveEdit}
@@ -245,6 +268,39 @@ export function Rooms() {
               Special room (🔒)
             </label>
 
+            <label className="flex select-none items-center gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-emerald-600"
+                checked={form.is_exclusive_room}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    is_exclusive_room: e.target.checked,
+                    exclusive_subject_id: e.target.checked ? f.exclusive_subject_id : '',
+                  }))
+                }
+              />
+              Exclusive room
+            </label>
+
+            {form.is_exclusive_room ? (
+              <div>
+                <label htmlFor="room_exclusive_subject" className="text-xs font-medium text-slate-600">
+                  Select Subject
+                </label>
+                <PremiumSelect
+                  id="room_exclusive_subject"
+                  ariaLabel="Select exclusive subject"
+                  className="mt-1 text-sm"
+                  value={form.exclusive_subject_id}
+                  onValueChange={(v) => setForm((f) => ({ ...f, exclusive_subject_id: v }))}
+                  options={subjectOptions.map((s) => ({ value: s.id, label: `${s.code} - ${s.name}` }))}
+                  placeholder="Select subject"
+                />
+              </div>
+            ) : null}
+
             {form.is_special ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                 Special rooms are never auto-assigned by the solver. Use Special Allotments to place them.
@@ -267,7 +323,12 @@ export function Rooms() {
             <button
               className="btn-primary text-sm font-semibold disabled:opacity-50"
               onClick={onCreate}
-              disabled={loading || !form.code.trim() || !form.name.trim()}
+              disabled={
+                loading ||
+                !form.code.trim() ||
+                !form.name.trim() ||
+                (form.is_exclusive_room && !form.exclusive_subject_id)
+              }
             >
               {loading ? 'Saving…' : 'Save Room'}
             </button>

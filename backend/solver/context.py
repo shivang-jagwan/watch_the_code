@@ -137,6 +137,10 @@ class SolverContext:
     # subject_id → list[room_id]; populated by data_loader from subject_allowed_rooms table.
     # Empty list means "no restriction — use default room pool".
     allowed_rooms_by_subject: dict[Any, list[Any]] = field(default_factory=dict)
+    # subject_id → set[room_id] where mapping is marked exclusive.
+    exclusive_rooms_by_subject: dict[Any, set[Any]] = field(default_factory=lambda: defaultdict(set))
+    # room_id → subject_id that owns this room exclusively.
+    exclusive_subject_by_room: dict[Any, Any] = field(default_factory=dict)
 
     # Elective blocks
     blocks_by_section: dict[Any, list[Any]] = field(default_factory=lambda: defaultdict(list))

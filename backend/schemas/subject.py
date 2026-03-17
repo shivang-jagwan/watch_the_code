@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SubjectBase(BaseModel):
@@ -57,36 +57,19 @@ class SubjectOut(BaseModel):
     is_active: bool
     credits: int
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SubjectAllowedRoomOut(BaseModel):
     id: uuid.UUID
     subject_id: uuid.UUID
     room_id: uuid.UUID
+    is_exclusive: bool = False
     created_at: datetime
-
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ListSubjectAllowedRoomsResponse(BaseModel):
     subject_id: uuid.UUID
     room_ids: list[uuid.UUID]
-
-
-class SubjectAllowedRoomOut(BaseModel):
-    id: uuid.UUID
-    subject_id: uuid.UUID
-    room_id: uuid.UUID
-    created_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class ListSubjectAllowedRoomsResponse(BaseModel):
-    subject_id: uuid.UUID
-    room_ids: list[uuid.UUID]
+    exclusive_room_ids: list[uuid.UUID] = []

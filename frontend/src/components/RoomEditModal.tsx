@@ -1,14 +1,16 @@
 import React from 'react'
 import type { Room, RoomPut } from '../api/rooms'
+import type { RoomExclusiveSubjectOption } from '../api/rooms'
 import { useModalScrollLock } from '../hooks/useModalScrollLock'
 import { PremiumSelect } from './PremiumSelect'
 
 export type RoomEditModalProps = {
   open: boolean
   room: Room | null
+  subjects: RoomExclusiveSubjectOption[]
   loading?: boolean
   onClose: () => void
-  onSave: (payload: RoomPut) => Promise<void> | void
+  onSave: (payload: RoomPut, exclusiveSubjectId: string | null) => Promise<void> | void
 }
 
 const ROOM_TYPES = [
@@ -25,6 +27,8 @@ type FormState = {
   is_active: boolean
   is_special: boolean
   special_note: string
+  is_exclusive_room: boolean
+  exclusive_subject_id: string
 }
 
 function roomToForm(r: Room): FormState {
@@ -36,6 +40,8 @@ function roomToForm(r: Room): FormState {
     is_active: Boolean(r.is_active),
     is_special: Boolean((r as any).is_special),
     special_note: String((r as any).special_note ?? ''),
+    is_exclusive_room: Boolean((r as any).exclusive_subject_id),
+    exclusive_subject_id: String((r as any).exclusive_subject_id ?? ''),
   }
 }
 
@@ -45,10 +51,13 @@ function validateForm(f: FormState): string[] {
   if (!f.name.trim()) errors.push('Name is required')
   if (Number.isNaN(f.capacity) || f.capacity < 0) errors.push('Capacity must be >= 0')
   if (!String(f.room_type).trim()) errors.push('Type is required')
+  if (f.is_exclusive_room && !String(f.exclusive_subject_id).trim()) {
+    errors.push('Select subject for exclusive room')
+  }
   return errors
 }
 
-export function RoomEditModal({ open, room, loading, onClose, onSave }: RoomEditModalProps) {
+export function RoomEditModal({ open, room, subjects, loading, onClose, onSave }: RoomEditModalProps) {
   useModalScrollLock(open)
 
   const [form, setForm] = React.useState<FormState | null>(null)
@@ -75,6 +84,7 @@ export function RoomEditModal({ open, room, loading, onClose, onSave }: RoomEdit
   if (!open || !room || !form) return null
 
   const idPrefix = `edit_room_${room.id}`
+  const subjectOptions = React.useMemo(() => subjects.map((s) => ({ value: s.id, label: `${s.code} - ${s.name}` })), [subjects])
 
   const dirty =
     form.code.trim() !== (room.code ?? '').trim() ||
@@ -83,7 +93,9 @@ export function RoomEditModal({ open, room, loading, onClose, onSave }: RoomEdit
     Number(form.capacity) !== Number(room.capacity) ||
     Boolean(form.is_active) !== Boolean(room.is_active) ||
     Boolean(form.is_special) !== Boolean((room as any).is_special) ||
-    String(form.special_note ?? '') !== String((room as any).special_note ?? '')
+    String(form.special_note ?? '') !== String((room as any).special_note ?? '') ||
+    Boolean(form.is_exclusive_room) !== Boolean((room as any).exclusive_subject_id) ||
+    String(form.exclusive_subject_id ?? '') !== String((room as any).exclusive_subject_id ?? '')
 
   async function handleSave() {
     if (!form) return
@@ -102,7 +114,10 @@ export function RoomEditModal({ open, room, loading, onClose, onSave }: RoomEdit
       special_note: form.special_note.trim() ? form.special_note.trim() : null,
     }
 
-    await onSave(payload)
+    await onSave(
+      payload,
+      form.is_exclusive_room ? String(form.exclusive_subject_id) : null,
+    )
   }
 
   return (
@@ -204,6 +219,42 @@ export function RoomEditModal({ open, room, loading, onClose, onSave }: RoomEdit
               />
               <span className="text-slate-700 font-medium">Special room (🔒)</span>
             </label>
+
+            <label className="checkbox-row rounded-lg border border-white/40 bg-white/70">
+              <input
+                type="checkbox"
+                checked={form.is_exclusive_room}
+                onChange={(e) =>
+                  setForm((f) =>
+                    f
+                      ? {
+                          ...f,
+                          is_exclusive_room: e.target.checked,
+                          exclusive_subject_id: e.target.checked ? f.exclusive_subject_id : '',
+                        }
+                      : f,
+                  )
+                }
+              />
+              <span className="text-slate-700 font-medium">Exclusive room</span>
+            </label>
+
+            {form.is_exclusive_room ? (
+              <div>
+                <label htmlFor={`${idPrefix}_exclusive_subject`} className="text-xs font-medium text-slate-600">
+                  Select subject
+                </label>
+                <PremiumSelect
+                  id={`${idPrefix}_exclusive_subject`}
+                  ariaLabel="Exclusive subject"
+                  className="mt-1 text-sm"
+                  value={form.exclusive_subject_id}
+                  onValueChange={(v) => setForm((f) => (f ? { ...f, exclusive_subject_id: v } : f))}
+                  options={subjectOptions}
+                  placeholder="Select subject"
+                />
+              </div>
+            ) : null}
 
             {form.is_special ? (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">

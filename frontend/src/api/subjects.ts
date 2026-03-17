@@ -80,8 +80,12 @@ export async function getSubjectAllowedRooms(subjectId: string): Promise<Subject
   return apiFetch<SubjectAllowedRoomsResponse>(`/api/subjects/${subjectId}/allowed-rooms`)
 }
 
-export async function addSubjectAllowedRoom(subjectId: string, roomId: string): Promise<{ id: string }> {
-  return apiFetch<{ id: string }>(`/api/subjects/${subjectId}/allowed-rooms?room_id=${roomId}`, {
+export async function addSubjectAllowedRoom(
+  subjectId: string,
+  roomId: string,
+  isExclusive = false,
+): Promise<{ id: string }> {
+  return apiFetch<{ id: string }>(`/api/subjects/${subjectId}/allowed-rooms?room_id=${roomId}&is_exclusive=${String(isExclusive)}`, {
     method: 'POST',
   })
 }

@@ -105,9 +105,23 @@ def pick_room(ctx: SolverContext, slot_id: Any, subject_type: str, section_id: A
         if subject_id is not None
         else None
     )
+    subject_exclusive = (
+        set(ctx.exclusive_rooms_by_subject.get(subject_id, set()))
+        if subject_id is not None
+        else set()
+    )
+    exclusive_owned_by_other = {
+        rid
+        for rid, owner_subj in ctx.exclusive_subject_by_room.items()
+        if subject_id is None or owner_subj != subject_id
+    }
+
     if subject_allowed:
         # Resolve IDs → Room objects (those still active in ctx.room_by_id).
-        candidates = [ctx.room_by_id[rid] for rid in subject_allowed if rid in ctx.room_by_id]
+        allowed_candidates = [ctx.room_by_id[rid] for rid in subject_allowed if rid in ctx.room_by_id]
+        exclusive_candidates = [r for r in allowed_candidates if r.id in subject_exclusive]
+        regular_candidates = [r for r in allowed_candidates if r.id not in exclusive_owned_by_other and r.id not in subject_exclusive]
+        candidates = [*exclusive_candidates, *regular_candidates]
     else:
         tag = "LAB" if subject_type == "LAB" else "THEORY"
         # Fast path: use pre-computed best-fit candidate list for this section.
@@ -119,6 +133,9 @@ def pick_room(ctx: SolverContext, slot_id: Any, subject_type: str, section_id: A
         # Fallback: use the globally sorted base list (no section strength info).
         if candidates is None:
             candidates = ctx.lab_rooms_sorted if subject_type == "LAB" else ctx.theory_rooms_sorted
+        exclusive_candidates = [r for r in candidates if r.id in subject_exclusive]
+        regular_candidates = [r for r in candidates if r.id not in exclusive_owned_by_other and r.id not in subject_exclusive]
+        candidates = [*exclusive_candidates, *regular_candidates]
 
     if not candidates:
         return None, False
@@ -139,14 +156,28 @@ def pick_room(ctx: SolverContext, slot_id: Any, subject_type: str, section_id: A
     return candidates[0].id, False
 
 
-def pick_lt_room(ctx: SolverContext, slot_id: Any) -> tuple[Any | None, bool]:
+def pick_lt_room(ctx: SolverContext, slot_id: Any, subject_id: Any = None) -> tuple[Any | None, bool]:
     """Pick a free LT (or CLASSROOM fallback) room for *slot_id*.
 
     OPTIMIZATION (Task 5): uses ctx.lt_plus_classroom_rooms_sorted which
     is built once by _build_room_cache() — no list construction per call.
     """
     sid = _sid(slot_id)
-    candidates = ctx.lt_plus_classroom_rooms_sorted
+    subject_exclusive = (
+        set(ctx.exclusive_rooms_by_subject.get(subject_id, set()))
+        if subject_id is not None
+        else set()
+    )
+    exclusive_owned_by_other = {
+        rid
+        for rid, owner_subj in ctx.exclusive_subject_by_room.items()
+        if subject_id is None or owner_subj != subject_id
+    }
+
+    base_candidates = ctx.lt_plus_classroom_rooms_sorted
+    exclusive_candidates = [r for r in base_candidates if r.id in subject_exclusive]
+    regular_candidates = [r for r in base_candidates if r.id not in exclusive_owned_by_other and r.id not in subject_exclusive]
+    candidates = [*exclusive_candidates, *regular_candidates]
     if not candidates:
         return None, False
     for room in candidates:
@@ -178,10 +209,26 @@ def pick_room_for_block(ctx: SolverContext, slot_ids: list[str], subject_id: Any
         if subject_id is not None
         else None
     )
+    subject_exclusive = (
+        set(ctx.exclusive_rooms_by_subject.get(subject_id, set()))
+        if subject_id is not None
+        else set()
+    )
+    exclusive_owned_by_other = {
+        rid
+        for rid, owner_subj in ctx.exclusive_subject_by_room.items()
+        if subject_id is None or owner_subj != subject_id
+    }
     if subject_allowed:
-        candidates = [ctx.room_by_id[rid] for rid in subject_allowed if rid in ctx.room_by_id]
+        allowed_candidates = [ctx.room_by_id[rid] for rid in subject_allowed if rid in ctx.room_by_id]
+        exclusive_candidates = [r for r in allowed_candidates if r.id in subject_exclusive]
+        regular_candidates = [r for r in allowed_candidates if r.id not in exclusive_owned_by_other and r.id not in subject_exclusive]
+        candidates = [*exclusive_candidates, *regular_candidates]
     else:
-        candidates = ctx.lab_rooms_sorted
+        base_candidates = ctx.lab_rooms_sorted
+        exclusive_candidates = [r for r in base_candidates if r.id in subject_exclusive]
+        regular_candidates = [r for r in base_candidates if r.id not in exclusive_owned_by_other and r.id not in subject_exclusive]
+        candidates = [*exclusive_candidates, *regular_candidates]
     if not candidates:
         return None, False
 

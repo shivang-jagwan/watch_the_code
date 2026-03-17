@@ -534,7 +534,7 @@ def _emit_block_batch_occurrence(ctx: SolverContext, block_id: Any, batch_idx: i
                 )
             room_id = forced
         else:
-            room_id, ok_room = pick_lt_room(ctx, slot_id)
+            room_id, ok_room = pick_lt_room(ctx, slot_id, subject_id=subj_id)
             if room_id is None:
                 continue
 
@@ -628,7 +628,7 @@ def _write_combined_theory_entries(ctx: SolverContext, solver: cp_model.CpSolver
         if fixed_rooms:
             room_id, ok_room = fixed_rooms[0], True
         else:
-            room_id, ok_room = pick_lt_room(ctx, slot_id)
+            room_id, ok_room = pick_lt_room(ctx, slot_id, subject_id=subj_id)
         if room_id is None:
             continue
         if not ok_room:

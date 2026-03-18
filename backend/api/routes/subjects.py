@@ -9,14 +9,17 @@ from sqlalchemy.orm import Session
 
 from api.deps import get_tenant_id, require_admin
 from api.tenant import get_by_id, where_tenant
-from core.db import get_db
+from core.db import get_db, table_exists
 from models.academic_year import AcademicYear
 from models.combined_group import CombinedGroup
 from models.combined_group_section import CombinedGroupSection
+from models.combined_subject_group import CombinedSubjectGroup
 from models.elective_block_subject import ElectiveBlockSubject
 from models.fixed_timetable_entry import FixedTimetableEntry
 from models.program import Program
 from models.room import Room
+from models.track_subject import TrackSubject
+from models.curriculum_subject import CurriculumSubject
 from models.section_subject import SectionSubject
 from models.special_allotment import SpecialAllotment
 from models.subject import Subject
@@ -368,17 +371,47 @@ def delete_subject(
         stmt_allowed_rooms = where_tenant(delete(SubjectAllowedRoom).where(SubjectAllowedRoom.subject_id == subject_id), SubjectAllowedRoom, tenant_id)
         deleted["subject_allowed_rooms"] = db.execute(stmt_allowed_rooms).rowcount or 0
 
-        stmt_elective = where_tenant(delete(ElectiveBlockSubject).where(ElectiveBlockSubject.subject_id == subject_id), ElectiveBlockSubject, tenant_id)
-        deleted["elective_block_subjects"] = db.execute(stmt_elective).rowcount or 0
+        if table_exists(db, "elective_block_subjects"):
+            stmt_elective = where_tenant(delete(ElectiveBlockSubject).where(ElectiveBlockSubject.subject_id == subject_id), ElectiveBlockSubject, tenant_id)
+            deleted["elective_block_subjects"] = db.execute(stmt_elective).rowcount or 0
+        else:
+            deleted["elective_block_subjects"] = 0
 
-        stmt_cg_section = where_tenant(delete(CombinedGroupSection).where(CombinedGroupSection.subject_id == subject_id), CombinedGroupSection, tenant_id)
-        deleted["combined_group_sections"] = db.execute(stmt_cg_section).rowcount or 0
+        if table_exists(db, "combined_group_sections"):
+            stmt_cg_section = where_tenant(delete(CombinedGroupSection).where(CombinedGroupSection.subject_id == subject_id), CombinedGroupSection, tenant_id)
+            deleted["combined_group_sections"] = db.execute(stmt_cg_section).rowcount or 0
+        else:
+            deleted["combined_group_sections"] = 0
 
-        stmt_cg = where_tenant(delete(CombinedGroup).where(CombinedGroup.subject_id == subject_id), CombinedGroup, tenant_id)
-        deleted["combined_groups"] = db.execute(stmt_cg).rowcount or 0
+        if table_exists(db, "combined_groups"):
+            stmt_cg = where_tenant(delete(CombinedGroup).where(CombinedGroup.subject_id == subject_id), CombinedGroup, tenant_id)
+            deleted["combined_groups"] = db.execute(stmt_cg).rowcount or 0
+        else:
+            deleted["combined_groups"] = 0
 
-        stmt_tss = where_tenant(delete(TeacherSubjectSection).where(TeacherSubjectSection.subject_id == subject_id), TeacherSubjectSection, tenant_id)
-        deleted["teacher_subject_sections"] = db.execute(stmt_tss).rowcount or 0
+        if table_exists(db, "combined_subject_groups"):
+            stmt_legacy_cg = where_tenant(delete(CombinedSubjectGroup).where(CombinedSubjectGroup.subject_id == subject_id), CombinedSubjectGroup, tenant_id)
+            deleted["combined_subject_groups"] = db.execute(stmt_legacy_cg).rowcount or 0
+        else:
+            deleted["combined_subject_groups"] = 0
+
+        if table_exists(db, "teacher_subject_sections"):
+            stmt_tss = where_tenant(delete(TeacherSubjectSection).where(TeacherSubjectSection.subject_id == subject_id), TeacherSubjectSection, tenant_id)
+            deleted["teacher_subject_sections"] = db.execute(stmt_tss).rowcount or 0
+        else:
+            deleted["teacher_subject_sections"] = 0
+
+        if table_exists(db, "track_subjects"):
+            stmt_track = where_tenant(delete(TrackSubject).where(TrackSubject.subject_id == subject_id), TrackSubject, tenant_id)
+            deleted["track_subjects"] = db.execute(stmt_track).rowcount or 0
+        else:
+            deleted["track_subjects"] = 0
+
+        if table_exists(db, "curriculum_subjects"):
+            stmt_curr = where_tenant(delete(CurriculumSubject).where(CurriculumSubject.subject_id == subject_id), CurriculumSubject, tenant_id)
+            deleted["curriculum_subjects"] = db.execute(stmt_curr).rowcount or 0
+        else:
+            deleted["curriculum_subjects"] = 0
 
         db.delete(subject)
         db.commit()

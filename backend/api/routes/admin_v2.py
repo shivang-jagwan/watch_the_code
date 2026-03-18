@@ -18,11 +18,17 @@ from models.combined_group import CombinedGroup
 from models.combined_group_section import CombinedGroupSection
 from models.combined_subject_group import CombinedSubjectGroup
 from models.combined_subject_section import CombinedSubjectSection
+from models.curriculum_subject import CurriculumSubject
+from models.elective_block_subject import ElectiveBlockSubject
+from models.fixed_timetable_entry import FixedTimetableEntry
 from models.program import Program
+from models.section_elective_block import SectionElectiveBlock
+from models.section_subject import SectionSubject
 from models.section import Section
 from models.section_time_window import SectionTimeWindow
 from models.special_allotment import SpecialAllotment
 from models.subject import Subject
+from models.subject_allowed_room import SubjectAllowedRoom
 from models.teacher import Teacher
 from models.teacher_subject_section import TeacherSubjectSection
 from models.time_slot import TimeSlot
@@ -30,8 +36,6 @@ from models.timetable_entry import TimetableEntry
 from models.timetable_run import TimetableRun
 from models.track_subject import TrackSubject
 from models.elective_block import ElectiveBlock
-from models.elective_block_subject import ElectiveBlockSubject
-from models.section_elective_block import SectionElectiveBlock
 from schemas.admin import (
     AdminActionResult,
     AcademicYearOut,
@@ -510,13 +514,147 @@ def clear_timetables(
             raise HTTPException(status_code=404, detail="ACADEMIC_YEAR_NOT_FOUND")
         year_id = year.id
 
+    # If program_code is provided, perform a full purge for that program/year scope.
+    # This removes master data and generated timetable artifacts together.
+    if payload.program_code is not None and payload.program_code.strip():
+        program = _get_program(db, payload.program_code.strip(), tenant_id=tenant_id)
+
+        q_sections = select(Section.id).where(Section.program_id == program.id)
+        q_sections = where_tenant(q_sections, Section, tenant_id)
+        if year_id is not None:
+            q_sections = q_sections.where(Section.academic_year_id == year_id)
+        section_ids = db.execute(q_sections).scalars().all()
+
+        q_subjects = select(Subject.id).where(Subject.program_id == program.id)
+        q_subjects = where_tenant(q_subjects, Subject, tenant_id)
+        if year_id is not None:
+            q_subjects = q_subjects.where(Subject.academic_year_id == year_id)
+        subject_ids = db.execute(q_subjects).scalars().all()
+
+        q_blocks = select(ElectiveBlock.id).where(ElectiveBlock.program_id == program.id)
+        q_blocks = where_tenant(q_blocks, ElectiveBlock, tenant_id)
+        if year_id is not None:
+            q_blocks = q_blocks.where(ElectiveBlock.academic_year_id == year_id)
+        block_ids = db.execute(q_blocks).scalars().all()
+
+        deleted_total = 0
+
+        stmt_runs = delete(TimetableRun)
+        stmt_runs = where_tenant(stmt_runs, TimetableRun, tenant_id)
+        stmt_runs = stmt_runs.where(TimetableRun.parameters["program_code"].astext == payload.program_code.strip())
+        if year_id is not None:
+            stmt_runs = stmt_runs.where(TimetableRun.academic_year_id == year_id)
+        deleted_total += db.execute(stmt_runs).rowcount or 0
+
+        if section_ids:
+            stmt = where_tenant(delete(TimetableEntry).where(TimetableEntry.section_id.in_(section_ids)), TimetableEntry, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(FixedTimetableEntry).where(FixedTimetableEntry.section_id.in_(section_ids)), FixedTimetableEntry, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(SpecialAllotment).where(SpecialAllotment.section_id.in_(section_ids)), SpecialAllotment, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(TeacherSubjectSection).where(TeacherSubjectSection.section_id.in_(section_ids)), TeacherSubjectSection, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(SectionSubject).where(SectionSubject.section_id.in_(section_ids)), SectionSubject, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(SectionTimeWindow).where(SectionTimeWindow.section_id.in_(section_ids)), SectionTimeWindow, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(SectionElectiveBlock).where(SectionElectiveBlock.section_id.in_(section_ids)), SectionElectiveBlock, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(CombinedGroupSection).where(CombinedGroupSection.section_id.in_(section_ids)), CombinedGroupSection, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(CombinedSubjectSection).where(CombinedSubjectSection.section_id.in_(section_ids)), CombinedSubjectSection, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+        if subject_ids:
+            stmt = where_tenant(delete(TimetableEntry).where(TimetableEntry.subject_id.in_(subject_ids)), TimetableEntry, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(FixedTimetableEntry).where(FixedTimetableEntry.subject_id.in_(subject_ids)), FixedTimetableEntry, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(SpecialAllotment).where(SpecialAllotment.subject_id.in_(subject_ids)), SpecialAllotment, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(TeacherSubjectSection).where(TeacherSubjectSection.subject_id.in_(subject_ids)), TeacherSubjectSection, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(SubjectAllowedRoom).where(SubjectAllowedRoom.subject_id.in_(subject_ids)), SubjectAllowedRoom, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(TrackSubject).where(TrackSubject.subject_id.in_(subject_ids)), TrackSubject, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            if table_exists(db, "curriculum_subjects"):
+                stmt = where_tenant(delete(CurriculumSubject).where(CurriculumSubject.subject_id.in_(subject_ids)), CurriculumSubject, tenant_id)
+                deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(CombinedGroupSection).where(CombinedGroupSection.subject_id.in_(subject_ids)), CombinedGroupSection, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(CombinedGroup).where(CombinedGroup.subject_id.in_(subject_ids)), CombinedGroup, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(CombinedSubjectGroup).where(CombinedSubjectGroup.subject_id.in_(subject_ids)), CombinedSubjectGroup, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(ElectiveBlockSubject).where(ElectiveBlockSubject.subject_id.in_(subject_ids)), ElectiveBlockSubject, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+        if block_ids:
+            stmt = where_tenant(delete(ElectiveBlockSubject).where(ElectiveBlockSubject.block_id.in_(block_ids)), ElectiveBlockSubject, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(SectionElectiveBlock).where(SectionElectiveBlock.block_id.in_(block_ids)), SectionElectiveBlock, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            stmt = where_tenant(delete(ElectiveBlock).where(ElectiveBlock.id.in_(block_ids)), ElectiveBlock, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+        if section_ids:
+            stmt = where_tenant(delete(Section).where(Section.id.in_(section_ids)), Section, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+        if subject_ids:
+            stmt = where_tenant(delete(Subject).where(Subject.id.in_(subject_ids)), Subject, tenant_id)
+            deleted_total += db.execute(stmt).rowcount or 0
+
+        if year_id is not None:
+            stmt = where_tenant(
+                delete(TrackSubject)
+                .where(TrackSubject.program_id == program.id)
+                .where(TrackSubject.academic_year_id == year_id),
+                TrackSubject,
+                tenant_id,
+            )
+            deleted_total += db.execute(stmt).rowcount or 0
+
+            if table_exists(db, "curriculum_subjects"):
+                stmt = where_tenant(
+                    delete(CurriculumSubject)
+                    .where(CurriculumSubject.program_id == program.id)
+                    .where(CurriculumSubject.academic_year_id == year_id),
+                    CurriculumSubject,
+                    tenant_id,
+                )
+                deleted_total += db.execute(stmt).rowcount or 0
+
+        db.commit()
+        return AdminActionResult(ok=True, deleted=deleted_total, message="PROGRAM_YEAR_PURGED")
+
+    # Legacy behavior: clear timetable runs only.
     stmt = delete(TimetableRun)
     stmt = where_tenant(stmt, TimetableRun, tenant_id)
     if year_id is not None:
         stmt = stmt.where(TimetableRun.academic_year_id == year_id)
-    if payload.program_code is not None and payload.program_code.strip():
-        stmt = stmt.where(TimetableRun.parameters["program_code"].astext == payload.program_code.strip())
-
     deleted = db.execute(stmt).rowcount or 0
     db.commit()
     return AdminActionResult(ok=True, deleted=deleted)

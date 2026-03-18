@@ -71,7 +71,7 @@ export function Dashboard() {
         academic_year_number: academicYearNumber,
       })
       if (result.ok) {
-        setActionMessage(`Cleared ${result.deleted ?? 0} run(s) for Year ${academicYearNumber}`)
+        setActionMessage(`Cleared ${result.deleted ?? 0} records for Program ${programCode.trim()} Year ${academicYearNumber}`)
         setReloadKey((k) => k + 1)
       } else {
         setActionMessage(result.message || 'Clear failed')

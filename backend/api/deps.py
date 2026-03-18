@@ -53,12 +53,13 @@ def get_current_user(
         bool(cookie_token),
         request.url.path,
     )
-    if not bearer_token:
-        logger.debug("auth.missing_bearer path=%s", request.url.path)
+    token = bearer_token or cookie_token
+    if not token:
+        logger.debug("auth.missing_token path=%s", request.url.path)
         raise HTTPException(status_code=401, detail="NOT_AUTHENTICATED")
 
-    # Protected API routes require a Bearer token.
-    payload = _decode_payload(bearer_token)
+    # Accept either Authorization Bearer or HttpOnly access_token cookie.
+    payload = _decode_payload(token)
     if payload is None:
         logger.debug("auth.token_invalid path=%s", request.url.path)
         raise HTTPException(status_code=401, detail="INVALID_TOKEN")

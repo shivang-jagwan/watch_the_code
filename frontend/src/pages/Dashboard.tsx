@@ -17,6 +17,7 @@ export function Dashboard() {
   const [error, setError] = React.useState<string>('')
   const [actionMessage, setActionMessage] = React.useState<string>('')
   const [clearingAll, setClearingAll] = React.useState(false)
+  const [reloadKey, setReloadKey] = React.useState(0)
 
   const [sectionsTotal, setSectionsTotal] = React.useState<number>(0)
   const [sectionsActive, setSectionsActive] = React.useState<number>(0)
@@ -47,11 +48,16 @@ export function Dashboard() {
   }
 
   async function onClearAllData() {
+    if (!programCode.trim()) {
+      setActionMessage('Select a program first')
+      return
+    }
+
     const ok = window.confirm(
-      'This will clear ALL generated timetable entries and conflicts for all years. Continue?',
+      `This will clear generated timetable data for Program ${programCode.trim()} in Year ${academicYearNumber}. Continue?`,
     )
     if (!ok) return
-    const confirmWord = window.prompt('Type DELETE to confirm full clear')
+    const confirmWord = window.prompt(`Type DELETE to confirm clear for Year ${academicYearNumber}`)
     if (confirmWord !== 'DELETE') {
       setActionMessage('Clear cancelled')
       return
@@ -59,9 +65,13 @@ export function Dashboard() {
 
     setClearingAll(true)
     try {
-      const result = await clearTimetables({ confirm: 'DELETE' })
+      const result = await clearTimetables({
+        confirm: 'DELETE',
+        academic_year_number: academicYearNumber,
+      })
       if (result.ok) {
-        setActionMessage('All timetable data cleared successfully')
+        setActionMessage(`Cleared ${result.deleted ?? 0} run(s) for Year ${academicYearNumber}`)
+        setReloadKey((k) => k + 1)
       } else {
         setActionMessage(result.message || 'Clear failed')
       }
@@ -172,7 +182,7 @@ export function Dashboard() {
     return () => {
       cancelled = true
     }
-  }, [programCode, academicYearNumber])
+  }, [programCode, academicYearNumber, reloadKey])
 
   React.useEffect(() => {
     if (!latestRun) {

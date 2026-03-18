@@ -43,6 +43,10 @@ export function GenerateTimetable() {
   const [slotCount, setSlotCount] = React.useState<number | null>(null)
 
   const [seed, setSeed] = React.useState<string>('')
+  const [solverType, setSolverType] = React.useState<'GA_ONLY' | 'HYBRID'>('HYBRID')
+  const [gaPopulationSize, setGaPopulationSize] = React.useState<number>(24)
+  const [gaGenerations, setGaGenerations] = React.useState<number>(40)
+  const [gaCpSatSeconds, setGaCpSatSeconds] = React.useState<number>(1.0)
   const [maxTimeSeconds, setMaxTimeSeconds] = React.useState<number>(300)
   const [relaxTeacherLoadLimits, setRelaxTeacherLoadLimits] = React.useState(false)
   const [requireOptimal, setRequireOptimal] = React.useState(true)
@@ -120,10 +124,14 @@ export function GenerateTimetable() {
       const s = seed.trim() === '' ? null : Number(seed)
       const res = await solveTimetableGlobal({
         program_code: pc,
+        solver_type: solverType,
         seed: Number.isFinite(s as any) ? s : null,
         max_time_seconds: Number(maxTimeSeconds),
         relax_teacher_load_limits: Boolean(relaxTeacherLoadLimits),
         require_optimal: Boolean(requireOptimal),
+        population_size: Number(gaPopulationSize),
+        generations: Number(gaGenerations),
+        cp_sat_max_time_seconds: Number(gaCpSatSeconds),
       })
 
       if (res.status === 'RUNNING') {
@@ -144,6 +152,10 @@ export function GenerateTimetable() {
           run_id: detail.id,
           status: detail.status as SolveTimetableResponse['status'],
           entries_written: sr.entries_written ?? detail.entries_total ?? 0,
+          run_name: sr.run_name ?? (detail.parameters as any)?.run_name ?? null,
+          solver_type: sr.solver_type ?? (detail.parameters as any)?.solver_type ?? null,
+          best_fitness: sr.best_fitness ?? null,
+          generation_count: sr.generation_count ?? null,
           conflicts: [],
           reason_summary: sr.reason_summary ?? detail.notes ?? null,
           diagnostics: sr.diagnostics ?? [],
@@ -268,6 +280,18 @@ export function GenerateTimetable() {
                   {programCode}
                 </div>
               </div>
+              <div>
+                <label htmlFor="solver_type" className="text-xs font-medium text-slate-600">Solver mode</label>
+                <select
+                  id="solver_type"
+                  className="input-premium mt-1 w-full text-sm"
+                  value={solverType}
+                  onChange={(e) => setSolverType(e.target.value as 'GA_ONLY' | 'HYBRID')}
+                >
+                  <option value="GA_ONLY">Genetic Algorithm (GA)</option>
+                  <option value="HYBRID">Hybrid (GA + CP-SAT)</option>
+                </select>
+              </div>
               <div className="md:col-span-2">
                 <label className="text-xs font-medium text-slate-600">Scope</label>
                 <div className="mt-1 rounded-2xl border bg-slate-50 px-3 py-2 text-sm text-slate-800">
@@ -287,6 +311,28 @@ export function GenerateTimetable() {
                   placeholder="e.g. 42"
                 />
               </div>
+              <div>
+                <label htmlFor="ga_population" className="text-xs font-medium text-slate-600">Population</label>
+                <input
+                  id="ga_population"
+                  type="number"
+                  min={2}
+                  className="input-premium mt-1 w-full text-sm"
+                  value={gaPopulationSize}
+                  onChange={(e) => setGaPopulationSize(Number(e.target.value))}
+                />
+              </div>
+              <div>
+                <label htmlFor="ga_generations" className="text-xs font-medium text-slate-600">Generations</label>
+                <input
+                  id="ga_generations"
+                  type="number"
+                  min={1}
+                  className="input-premium mt-1 w-full text-sm"
+                  value={gaGenerations}
+                  onChange={(e) => setGaGenerations(Number(e.target.value))}
+                />
+              </div>
             </div>
 
             <div className="mt-2 text-xs text-slate-500">
@@ -304,6 +350,19 @@ export function GenerateTimetable() {
                   className="input-premium mt-1 w-full text-sm"
                   value={maxTimeSeconds}
                   onChange={(e) => setMaxTimeSeconds(Number(e.target.value))}
+                />
+              </div>
+              <div>
+                <label htmlFor="ga_cpsat_seconds" className="text-xs font-medium text-slate-600">CP-SAT repair seconds (hybrid)</label>
+                <input
+                  id="ga_cpsat_seconds"
+                  type="number"
+                  min={0.1}
+                  step={0.1}
+                  className="input-premium mt-1 w-full text-sm"
+                  value={gaCpSatSeconds}
+                  onChange={(e) => setGaCpSatSeconds(Number(e.target.value))}
+                  disabled={solverType !== 'HYBRID'}
                 />
               </div>
               <div className="flex items-end">
@@ -375,6 +434,18 @@ export function GenerateTimetable() {
                 </div>
                 <div className="mt-1 text-sm text-slate-700">Entries written: {lastRun.entries_written}</div>
                 <div className="mt-1 text-sm text-slate-700">Conflicts: {lastRun.conflicts.length}</div>
+                {lastRun.run_name ? (
+                  <div className="mt-1 text-sm text-slate-700">Run name: {lastRun.run_name}</div>
+                ) : null}
+                {lastRun.solver_type ? (
+                  <div className="mt-1 text-sm text-slate-700">Solver type: {lastRun.solver_type}</div>
+                ) : null}
+                {lastRun.best_fitness != null ? (
+                  <div className="mt-1 text-sm text-slate-700">Best fitness: {lastRun.best_fitness}</div>
+                ) : null}
+                {lastRun.generation_count != null ? (
+                  <div className="mt-1 text-sm text-slate-700">Generation count: {lastRun.generation_count}</div>
+                ) : null}
 
                 {lastRun.objective_score != null &&
                 (lastRun.status === 'FEASIBLE' || lastRun.status === 'SUBOPTIMAL' || lastRun.status === 'OPTIMAL') ? (
@@ -543,6 +614,7 @@ export function GenerateTimetable() {
           </div>
         </div>
       </div>
+
     </div>
   )
 }

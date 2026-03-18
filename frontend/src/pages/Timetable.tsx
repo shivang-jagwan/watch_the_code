@@ -53,6 +53,15 @@ function viewLabel(v: TimetableView) {
   return 'Faculty Timetable'
 }
 
+function runDisplay(r: RunSummary): string {
+  const p = (r as any).parameters ?? {}
+  const sr = p._solver_result ?? {}
+  const runName = sr.run_name ?? p.run_name ?? r.solver_version ?? 'Solver'
+  const fitness = sr.best_fitness != null ? ` | fit=${sr.best_fitness}` : ''
+  const gens = sr.generation_count != null ? ` | gen=${sr.generation_count}` : ''
+  return `${runName}${fitness}${gens}`
+}
+
 function toGridCellMap(items: TimetableGridEntry[]) {
   const map = new Map<CellKey, TimetableGridEntry[]>()
   for (const e of items) {
@@ -1027,7 +1036,7 @@ export function Timetable() {
                   ? [{ value: '__none__', label: 'No runs found', disabled: true }]
                   : runsForSelect.map((r) => ({
                       value: r.id,
-                      label: `[${runTag(r)}] ${r.status} — ${new Date(r.created_at).toLocaleString()} (${r.id})`,
+                      label: `[${runTag(r)}] ${runDisplay(r)} — ${r.status} — ${new Date(r.created_at).toLocaleString()} (${r.id})`,
                     }))
               }
             />

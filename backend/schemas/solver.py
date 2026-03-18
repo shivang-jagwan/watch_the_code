@@ -35,6 +35,7 @@ class SolveTimetableRequest(GenerateTimetableRequest):
 
 
 class SolveGlobalTimetableRequest(GenerateGlobalTimetableRequest):
+    solver_type: Literal["GA_ONLY", "HYBRID"] = "HYBRID"
     max_time_seconds: float = Field(default=300.0, gt=0)
     relax_teacher_load_limits: bool = False
     require_optimal: bool = True
@@ -42,6 +43,18 @@ class SolveGlobalTimetableRequest(GenerateGlobalTimetableRequest):
     smart_relaxation: bool = False
     # Extended solve: if FEASIBLE after the initial budget, re-run with 2x time
     allow_extended_solve: bool = False
+    # GA / hybrid tuning overrides
+    population_size: int | None = Field(default=None, ge=2)
+    generations: int | None = Field(default=None, ge=1)
+    crossover_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    mutation_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    elitism_count: int | None = Field(default=None, ge=0)
+    stagnation_window: int | None = Field(default=None, ge=1)
+    mutation_boost: float | None = Field(default=None, ge=0.0, le=1.0)
+    target_fitness: float | None = None
+    max_score: float | None = None
+    tournament_k: int | None = Field(default=None, ge=2)
+    cp_sat_max_time_seconds: float | None = Field(default=None, gt=0)
 
 
 class SolverConflict(BaseModel):
@@ -87,6 +100,10 @@ class SolveTimetableResponse(BaseModel):
     optimality_gap: int | None = None
     solve_time_seconds: float | None = None
     message: str | None = None
+    run_name: str | None = None
+    solver_type: Literal["GA_ONLY", "HYBRID"] | None = None
+    best_fitness: float | None = None
+    generation_count: int | None = None
 
 
 class RunSummary(BaseModel):

@@ -76,6 +76,7 @@ from schemas.subject import SubjectOut
 from services.solver_validation import validate_prereqs
 from solver.cp_sat_solver import SolverInvariantError, solve_program_global, solve_program_year
 from solver.capacity_analyzer import build_capacity_data, analyze_capacity
+from solver.hybrid.db_pipeline import run_and_persist_dual_solver
 
 
 router = APIRouter()
@@ -2064,6 +2065,7 @@ def _global_solve_body(
         program = db.execute(q_program).scalar_one_or_none()
         if program is None:
             run.status = "VALIDATION_FAILED"
+            run.parameters = {**(run.parameters or {}), "run_status": "FAILED"}
             run.notes = f"Unknown program_code {payload.program_code!r}."
             db.commit()
             return
@@ -2077,6 +2079,7 @@ def _global_solve_body(
         sections = db.execute(q_sections).scalars().all()
         if not sections:
             run.status = "VALIDATION_FAILED"
+            run.parameters = {**(run.parameters or {}), "run_status": "FAILED"}
             run.notes = f"No active sections for program {payload.program_code!r}."
             db.commit()
             return
@@ -2096,6 +2099,7 @@ def _global_solve_body(
         errors = [c for c in prereq_conflicts if str(c.severity).upper() != "WARN"]
         if errors:
             run.status = "VALIDATION_FAILED"
+            run.parameters = {**(run.parameters or {}), "run_status": "FAILED"}
             db.commit()
             return
 
@@ -2136,6 +2140,7 @@ def _global_solve_body(
             getattr(payload, "smart_relaxation", False) and only_teacher_overload
         ):
             run.status = "VALIDATION_FAILED"
+            run.parameters = {**(run.parameters or {}), "run_status": "FAILED"}
             run.notes = f"Capacity analysis found {len(cap['issues'])} blocking shortages"
             db.commit()
             return
@@ -2167,37 +2172,80 @@ def _global_solve_body(
             )
             db.flush()
 
-        result = solve_program_global(
-            db,
-            run=run,
-            program_id=program.id,
-            seed=payload.seed,
-            max_time_seconds=max_time_seconds,
-            enforce_teacher_load_limits=not payload.relax_teacher_load_limits,
-            require_optimal=payload.require_optimal,
-            allow_extended_solve=getattr(payload, "allow_extended_solve", False),
-        )
+        solver_type = str(getattr(payload, "solver_type", "HYBRID") or "HYBRID").upper()
+        if solver_type in {"GA_ONLY", "HYBRID"}:
+            cfg_keys = {
+                "population_size",
+                "generations",
+                "crossover_rate",
+                "mutation_rate",
+                "elitism_count",
+                "stagnation_window",
+                "mutation_boost",
+                "target_fitness",
+                "max_score",
+                "tournament_k",
+                "cp_sat_max_time_seconds",
+            }
+            cfg_overrides = {
+                k: v
+                for k, v in payload.model_dump(exclude_none=True).items()
+                if k in cfg_keys
+            }
+            if "cp_sat_max_time_seconds" not in cfg_overrides:
+                cfg_overrides["cp_sat_max_time_seconds"] = min(float(max_time_seconds), 5.0)
 
-        # Persist solver stats so the polling endpoint can surface them.
-        try:
+            dual = run_and_persist_dual_solver(
+                db,
+                run=run,
+                program_id=program.id,
+                tenant_id=tenant_id,
+                solver_type=solver_type,
+                config_overrides=cfg_overrides,
+            )
+
+            # Merge additional diagnostics for run polling consumers.
             run.parameters = {
                 **(run.parameters or {}),
                 "_solver_result": {
-                    "objective_score": getattr(result, "objective_score", None),
-                    "solver_stats": getattr(result, "solver_stats", {}) or {},
-                    "best_bound": getattr(result, "best_objective_bound", None),
-                    "optimality_gap": getattr(result, "optimality_gap", None),
-                    "solve_time_seconds": getattr(result, "solve_time_seconds", None),
-                    "entries_written": result.entries_written,
-                    "reason_summary": getattr(result, "reason_summary", None),
-                    "warnings": getattr(result, "warnings", []) or [],
-                    "diagnostics": (capacity_diagnostics + (getattr(result, "diagnostics", []) or [])),
-                    "message": getattr(result, "message", None),
+                    **((run.parameters or {}).get("_solver_result") or {}),
+                    "diagnostics": capacity_diagnostics,
+                    "message": "Dual-solver run completed",
                 },
             }
             db.commit()
-        except Exception:
-            pass
+        else:
+            result = solve_program_global(
+                db,
+                run=run,
+                program_id=program.id,
+                seed=payload.seed,
+                max_time_seconds=max_time_seconds,
+                enforce_teacher_load_limits=not payload.relax_teacher_load_limits,
+                require_optimal=payload.require_optimal,
+                allow_extended_solve=getattr(payload, "allow_extended_solve", False),
+            )
+
+            # Persist solver stats so the polling endpoint can surface them.
+            try:
+                run.parameters = {
+                    **(run.parameters or {}),
+                    "_solver_result": {
+                        "objective_score": getattr(result, "objective_score", None),
+                        "solver_stats": getattr(result, "solver_stats", {}) or {},
+                        "best_bound": getattr(result, "best_objective_bound", None),
+                        "optimality_gap": getattr(result, "optimality_gap", None),
+                        "solve_time_seconds": getattr(result, "solve_time_seconds", None),
+                        "entries_written": result.entries_written,
+                        "reason_summary": getattr(result, "reason_summary", None),
+                        "warnings": getattr(result, "warnings", []) or [],
+                        "diagnostics": (capacity_diagnostics + (getattr(result, "diagnostics", []) or [])),
+                        "message": getattr(result, "message", None),
+                    },
+                }
+                db.commit()
+            except Exception:
+                pass
 
     except Exception as exc:
         logger.exception("_global_solve_body crashed for run %s", run_id)
@@ -2206,6 +2254,7 @@ def _global_solve_body(
             fresh = db.get(TimetableRun, run_id)
             if fresh is not None and str(fresh.status) in {"CREATED", ""}:
                 fresh.status = "ERROR"
+                fresh.parameters = {**(fresh.parameters or {}), "run_status": "FAILED"}
                 fresh.notes = f"{type(exc).__name__}: {str(exc)}"[:500]
                 db.commit()
         except Exception:
@@ -2237,11 +2286,15 @@ def solve_timetable_global(
             academic_year_id=None,
             seed=payload.seed,
             status="CREATED",
+            solver_version=("GA" if str(payload.solver_type).upper() == "GA_ONLY" else "GA+CP-SAT"),
             parameters={
                 "program_code": payload.program_code,
                 "max_time_seconds": max_time_seconds,
                 "relax_teacher_load_limits": payload.relax_teacher_load_limits,
                 "require_optimal": payload.require_optimal,
+                "solver_type": payload.solver_type,
+                "run_name": ("GA" if str(payload.solver_type).upper() == "GA_ONLY" else "GA+CP-SAT"),
+                "run_status": "RUNNING",
                 "scope": "PROGRAM_GLOBAL",
                 **({"tenant_id": str(tenant_id)} if tenant_id is not None else {}),
             },
@@ -2261,6 +2314,8 @@ def solve_timetable_global(
             run_id=run_id,
             status="RUNNING",
             entries_written=0,
+            run_name=("GA" if str(payload.solver_type).upper() == "GA_ONLY" else "GA+CP-SAT"),
+            solver_type=payload.solver_type,
         )
 
     except DatabaseUnavailableError:
@@ -2281,3 +2336,4 @@ def solve_timetable_global(
             status_code=500,
             detail={"error": "SOLVER_STARTUP_ERROR", "message": str(exc)},
         )
+

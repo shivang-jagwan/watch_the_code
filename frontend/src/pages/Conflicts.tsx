@@ -316,6 +316,15 @@ export function Conflicts() {
     return 'LEGACY'
   }
 
+  function runDisplay(r: RunSummary): string {
+    const p = (r as any).parameters ?? {}
+    const sr = p._solver_result ?? {}
+    const runName = sr.run_name ?? p.run_name ?? r.solver_version ?? 'Solver'
+    const fitness = sr.best_fitness != null ? ` | fit=${sr.best_fitness}` : ''
+    const gens = sr.generation_count != null ? ` | gen=${sr.generation_count}` : ''
+    return `${runName}${fitness}${gens}`
+  }
+
   const visibleRuns = React.useMemo(() => {
     return runs.filter((r) => {
       const scope = String((r as any).parameters?.scope ?? '')
@@ -513,6 +522,7 @@ export function Conflicts() {
                         <div className="text-xs opacity-80">{fmtDate(r.created_at)}</div>
                       </div>
                       <div className="mt-1 text-xs opacity-80">Run: {r.id}</div>
+                      <div className="mt-1 text-xs opacity-80">{runDisplay(r)}</div>
                     </button>
 
                     <button

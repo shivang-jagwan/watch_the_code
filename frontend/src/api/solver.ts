@@ -40,6 +40,10 @@ export type SolveTimetableResponse = {
   status: 'RUNNING' | 'FAILED_VALIDATION' | 'INFEASIBLE' | 'FEASIBLE' | 'SUBOPTIMAL' | 'OPTIMAL' | 'ERROR'
   entries_written: number
   conflicts: SolverConflict[]
+  run_name?: string | null
+  solver_type?: 'GA_ONLY' | 'HYBRID' | null
+  best_fitness?: number | null
+  generation_count?: number | null
 
   reason_summary?: string | null
   diagnostics?: Record<string, any>[]
@@ -84,10 +88,37 @@ export type SolveTimetableRequest = {
 
 export type SolveGlobalTimetableRequest = {
   program_code: string
+  solver_type?: 'GA_ONLY' | 'HYBRID'
   seed?: number | null
   max_time_seconds?: number
   relax_teacher_load_limits?: boolean
   require_optimal?: boolean
+  population_size?: number
+  generations?: number
+  crossover_rate?: number
+  mutation_rate?: number
+  elitism_count?: number
+  stagnation_window?: number
+  mutation_boost?: number
+  target_fitness?: number
+  max_score?: number
+  tournament_k?: number
+  cp_sat_max_time_seconds?: number
+}
+
+export type HybridEvolutionConfigPatch = {
+  population_size?: number
+  generations?: number
+  crossover_rate?: number
+  mutation_rate?: number
+  elitism_count?: number
+  stagnation_window?: number
+  mutation_boost?: number
+  target_fitness?: number
+  max_score?: number
+  tournament_k?: number
+  random_seed?: number
+  cp_sat_max_time_seconds?: number
 }
 
 export async function generateTimetable(payload: {
@@ -123,10 +154,22 @@ export async function solveTimetableGlobal(payload: SolveGlobalTimetableRequest)
     method: 'POST',
     body: JSON.stringify({
       program_code: payload.program_code,
+      solver_type: payload.solver_type ?? 'HYBRID',
       seed: payload.seed ?? null,
       max_time_seconds: payload.max_time_seconds ?? 300,
       relax_teacher_load_limits: Boolean(payload.relax_teacher_load_limits),
       require_optimal: Boolean(payload.require_optimal),
+      population_size: payload.population_size,
+      generations: payload.generations,
+      crossover_rate: payload.crossover_rate,
+      mutation_rate: payload.mutation_rate,
+      elitism_count: payload.elitism_count,
+      stagnation_window: payload.stagnation_window,
+      mutation_boost: payload.mutation_boost,
+      target_fitness: payload.target_fitness,
+      max_score: payload.max_score,
+      tournament_k: payload.tournament_k,
+      cp_sat_max_time_seconds: payload.cp_sat_max_time_seconds,
     }),
   })
 }

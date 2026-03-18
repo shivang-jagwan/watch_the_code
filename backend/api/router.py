@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from api.deps import require_admin
-from api.routes import admin_v2 as admin, auth, curriculum, manual_editor, programs, rooms, sections, solver, subjects, teachers, timetable
+from api.routes import admin_v2 as admin, auth, curriculum, manual_editor, programs, rooms, sections, solve_alias, solver, subjects, teachers, timetable
 
 
 api_router = APIRouter()
@@ -19,5 +19,11 @@ api_router.include_router(curriculum.router, prefix="/curriculum", tags=["curric
 api_router.include_router(teachers.router, prefix="/teachers", tags=["teachers"], dependencies=_protected)
 api_router.include_router(timetable.router, prefix="/timetable", tags=["timetable"], dependencies=_protected)
 api_router.include_router(solver.router, prefix="/solver", tags=["solver"], dependencies=_protected)
+# Compatibility alias endpoints:
+#   POST /api/solve
+#   GET  /api/solve/runs
+#   GET  /api/solve/runs/{run_id}
+#   GET  /api/timetable?run_id=...
+api_router.include_router(solve_alias.router, prefix="", tags=["solver"], dependencies=_protected)
 api_router.include_router(admin.router, prefix="/admin", tags=["admin"], dependencies=_protected)
 api_router.include_router(manual_editor.router, prefix="/manual-editor", tags=["manual-editor"], dependencies=_protected)

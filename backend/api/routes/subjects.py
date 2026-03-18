@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,9 +17,11 @@ from models.elective_block_subject import ElectiveBlockSubject
 from models.fixed_timetable_entry import FixedTimetableEntry
 from models.program import Program
 from models.room import Room
+from models.section_subject import SectionSubject
 from models.special_allotment import SpecialAllotment
 from models.subject import Subject
 from models.subject_allowed_room import SubjectAllowedRoom
+from models.teacher_subject_section import TeacherSubjectSection
 from models.timetable_entry import TimetableEntry
 from schemas.subject import (
     ListSubjectAllowedRoomsResponse,
@@ -322,6 +324,7 @@ def put_subject(
 @router.delete("/{subject_id}")
 def delete_subject(
     subject_id: uuid.UUID,
+    force: bool = Query(default=False),
     _admin=Depends(require_admin),
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
@@ -331,7 +334,7 @@ def delete_subject(
         raise HTTPException(status_code=404, detail="SUBJECT_NOT_FOUND")
 
     flags = _subject_usage_flags(db, subject_id=subject_id, tenant_id=tenant_id)
-    if any(flags.values()):
+    if any(flags.values()) and not force:
         raise HTTPException(
             status_code=409,
             detail={
@@ -342,13 +345,48 @@ def delete_subject(
                     "Cannot delete subject",
                     "Used in timetable or assignments",
                     f"Usage: {flags}",
+                    "Retry with ?force=true to delete subject and dependent records",
                 ],
             },
         )
 
+    if force:
+        deleted: dict[str, int] = {}
+
+        stmt_entries = where_tenant(delete(TimetableEntry).where(TimetableEntry.subject_id == subject_id), TimetableEntry, tenant_id)
+        deleted["timetable_entries"] = db.execute(stmt_entries).rowcount or 0
+
+        stmt_fixed = where_tenant(delete(FixedTimetableEntry).where(FixedTimetableEntry.subject_id == subject_id), FixedTimetableEntry, tenant_id)
+        deleted["fixed_timetable_entries"] = db.execute(stmt_fixed).rowcount or 0
+
+        stmt_special = where_tenant(delete(SpecialAllotment).where(SpecialAllotment.subject_id == subject_id), SpecialAllotment, tenant_id)
+        deleted["special_allotments"] = db.execute(stmt_special).rowcount or 0
+
+        stmt_section_subject = where_tenant(delete(SectionSubject).where(SectionSubject.subject_id == subject_id), SectionSubject, tenant_id)
+        deleted["section_subjects"] = db.execute(stmt_section_subject).rowcount or 0
+
+        stmt_allowed_rooms = where_tenant(delete(SubjectAllowedRoom).where(SubjectAllowedRoom.subject_id == subject_id), SubjectAllowedRoom, tenant_id)
+        deleted["subject_allowed_rooms"] = db.execute(stmt_allowed_rooms).rowcount or 0
+
+        stmt_elective = where_tenant(delete(ElectiveBlockSubject).where(ElectiveBlockSubject.subject_id == subject_id), ElectiveBlockSubject, tenant_id)
+        deleted["elective_block_subjects"] = db.execute(stmt_elective).rowcount or 0
+
+        stmt_cg_section = where_tenant(delete(CombinedGroupSection).where(CombinedGroupSection.subject_id == subject_id), CombinedGroupSection, tenant_id)
+        deleted["combined_group_sections"] = db.execute(stmt_cg_section).rowcount or 0
+
+        stmt_cg = where_tenant(delete(CombinedGroup).where(CombinedGroup.subject_id == subject_id), CombinedGroup, tenant_id)
+        deleted["combined_groups"] = db.execute(stmt_cg).rowcount or 0
+
+        stmt_tss = where_tenant(delete(TeacherSubjectSection).where(TeacherSubjectSection.subject_id == subject_id), TeacherSubjectSection, tenant_id)
+        deleted["teacher_subject_sections"] = db.execute(stmt_tss).rowcount or 0
+
+        db.delete(subject)
+        db.commit()
+        return {"ok": True, "force": True, "deleted": deleted}
+
     subject.is_active = False
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "force": False}
 
 
 # ---------------------------------------------------------------------------

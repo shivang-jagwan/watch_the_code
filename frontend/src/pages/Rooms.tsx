@@ -94,10 +94,10 @@ export function Rooms() {
   }
 
   async function onDelete(id: string) {
-    if (!confirm('Delete this room?')) return
+    if (!confirm('Delete this room and all dependent data? This cannot be undone.')) return
     setLoading(true)
     try {
-      await deleteRoom(id)
+      await deleteRoom(id, true)
       showToast('Room deleted')
       await refresh()
     } catch (e: any) {

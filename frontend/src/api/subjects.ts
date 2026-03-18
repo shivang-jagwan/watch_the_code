@@ -56,8 +56,8 @@ export async function createSubject(payload: SubjectCreate): Promise<Subject> {
   })
 }
 
-export async function deleteSubject(id: string): Promise<{ ok: true }> {
-  return apiFetch<{ ok: true }>(`/api/subjects/${id}`, { method: 'DELETE' })
+export async function deleteSubject(id: string, force = false): Promise<{ ok: true }> {
+  return apiFetch<{ ok: true }>(`/api/subjects/${id}?force=${String(force)}`, { method: 'DELETE' })
 }
 
 export async function updateSubject(id: string, payload: SubjectPut): Promise<Subject> {

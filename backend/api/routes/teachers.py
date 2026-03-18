@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,7 @@ from models.elective_block_subject import ElectiveBlockSubject
 from models.fixed_timetable_entry import FixedTimetableEntry
 from models.special_allotment import SpecialAllotment
 from models.teacher import Teacher
+from models.teacher_subject_section import TeacherSubjectSection
 from models.teacher_time_window import TeacherTimeWindow
 from models.timetable_entry import TimetableEntry
 from schemas.teacher import TeacherCreate, TeacherOut, TeacherPut, TeacherUpdate
@@ -222,6 +223,7 @@ def put_teacher(
 @router.delete("/{teacher_id}")
 def delete_teacher(
     teacher_id: uuid.UUID,
+    force: bool = Query(default=False),
     _admin=Depends(require_admin),
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
@@ -231,7 +233,7 @@ def delete_teacher(
         raise HTTPException(status_code=404, detail="TEACHER_NOT_FOUND")
 
     flags = _teacher_usage_flags(db, teacher_id=teacher_id, tenant_id=tenant_id)
-    if any(flags.values()):
+    if any(flags.values()) and not force:
         raise HTTPException(
             status_code=409,
             detail={
@@ -242,13 +244,42 @@ def delete_teacher(
                     "Cannot delete teacher",
                     "Used in timetable or assignments",
                     f"Usage: {flags}",
+                    "Retry with ?force=true to delete teacher and dependent records",
                 ],
             },
         )
 
+    if force:
+        deleted: dict[str, int] = {}
+
+        stmt_entries = where_tenant(delete(TimetableEntry).where(TimetableEntry.teacher_id == teacher_id), TimetableEntry, tenant_id)
+        deleted["timetable_entries"] = db.execute(stmt_entries).rowcount or 0
+
+        stmt_fixed = where_tenant(delete(FixedTimetableEntry).where(FixedTimetableEntry.teacher_id == teacher_id), FixedTimetableEntry, tenant_id)
+        deleted["fixed_timetable_entries"] = db.execute(stmt_fixed).rowcount or 0
+
+        stmt_special = where_tenant(delete(SpecialAllotment).where(SpecialAllotment.teacher_id == teacher_id), SpecialAllotment, tenant_id)
+        deleted["special_allotments"] = db.execute(stmt_special).rowcount or 0
+
+        stmt_combined = where_tenant(delete(CombinedGroup).where(CombinedGroup.teacher_id == teacher_id), CombinedGroup, tenant_id)
+        deleted["combined_groups"] = db.execute(stmt_combined).rowcount or 0
+
+        stmt_elective = where_tenant(delete(ElectiveBlockSubject).where(ElectiveBlockSubject.teacher_id == teacher_id), ElectiveBlockSubject, tenant_id)
+        deleted["elective_block_subjects"] = db.execute(stmt_elective).rowcount or 0
+
+        stmt_tss = where_tenant(delete(TeacherSubjectSection).where(TeacherSubjectSection.teacher_id == teacher_id), TeacherSubjectSection, tenant_id)
+        deleted["teacher_subject_sections"] = db.execute(stmt_tss).rowcount or 0
+
+        stmt_windows = where_tenant(delete(TeacherTimeWindow).where(TeacherTimeWindow.teacher_id == teacher_id), TeacherTimeWindow, tenant_id)
+        deleted["teacher_time_windows"] = db.execute(stmt_windows).rowcount or 0
+
+        db.delete(teacher)
+        db.commit()
+        return {"ok": True, "force": True, "deleted": deleted}
+
     teacher.is_active = False
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "force": False}
 
 
 # ---------------------------------------------------------------------------

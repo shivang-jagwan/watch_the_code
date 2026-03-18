@@ -190,10 +190,10 @@ export function Subjects() {
   }
 
   async function onDelete(id: string) {
-    if (!confirm('Delete this subject?')) return
+    if (!confirm('Delete this subject and all dependent data? This cannot be undone.')) return
     setLoading(true)
     try {
-      await deleteSubject(id)
+      await deleteSubject(id, true)
       showToast('Subject deleted')
       await refresh()
     } catch (e: any) {

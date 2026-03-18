@@ -4,7 +4,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -321,6 +321,7 @@ def update_room(
 @router.delete("/{room_id}")
 def delete_room(
     room_id: uuid.UUID,
+    force: bool = Query(default=False),
     _admin=Depends(require_admin),
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
@@ -332,7 +333,7 @@ def delete_room(
     flags = _room_in_use_flags(db, room_id=room_id, tenant_id=tenant_id)
     flags["used_in_combined_groups"] = False
     flags["used_in_elective_blocks"] = False
-    if any(flags.values()):
+    if any(flags.values()) and not force:
         raise HTTPException(
             status_code=409,
             detail={
@@ -343,9 +344,29 @@ def delete_room(
                     "Cannot delete room",
                     "Used in timetable or assignments",
                     f"Usage: {flags}",
+                    "Retry with ?force=true to delete room and dependent records",
                 ],
             },
         )
+
+    if force:
+        deleted: dict[str, int] = {}
+
+        stmt_entries = where_tenant(delete(TimetableEntry).where(TimetableEntry.room_id == room_id), TimetableEntry, tenant_id)
+        deleted["timetable_entries"] = db.execute(stmt_entries).rowcount or 0
+
+        stmt_fixed = where_tenant(delete(FixedTimetableEntry).where(FixedTimetableEntry.room_id == room_id), FixedTimetableEntry, tenant_id)
+        deleted["fixed_timetable_entries"] = db.execute(stmt_fixed).rowcount or 0
+
+        stmt_special = where_tenant(delete(SpecialAllotment).where(SpecialAllotment.room_id == room_id), SpecialAllotment, tenant_id)
+        deleted["special_allotments"] = db.execute(stmt_special).rowcount or 0
+
+        stmt_allowed = where_tenant(delete(SubjectAllowedRoom).where(SubjectAllowedRoom.room_id == room_id), SubjectAllowedRoom, tenant_id)
+        deleted["subject_allowed_rooms"] = db.execute(stmt_allowed).rowcount or 0
+
+        db.delete(room)
+        db.commit()
+        return {"ok": True, "force": True, "deleted": deleted}
 
     q_room_links = where_tenant(select(SubjectAllowedRoom).where(SubjectAllowedRoom.room_id == room_id), SubjectAllowedRoom, tenant_id)
     for row in db.execute(q_room_links).scalars().all():
@@ -353,7 +374,7 @@ def delete_room(
 
     room.is_active = False
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "force": False}
 
 
 @router.get("/{room_id}/exclusive-subject", response_model=RoomExclusiveSubjectResponse)

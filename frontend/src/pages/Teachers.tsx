@@ -261,22 +261,15 @@ export function Teachers() {
   }
 
   async function onDelete(id: string) {
-    if (!confirm('Delete this teacher?')) return
+    if (!confirm('Delete this teacher and all dependent data? This cannot be undone.')) return
     setLoading(true)
     try {
-      await deleteTeacher(id)
+      await deleteTeacher(id, true)
       showToast('Teacher deleted')
       await refresh()
     } catch (e: any) {
       const msg = String(e?.message ?? e)
-      if (msg.includes('DELETE_BLOCKED')) {
-        showToast(
-          'Cannot delete teacher: used in timetable or assignments. Remove linked entries first.',
-          4500,
-        )
-      } else {
-        showToast(`Delete failed: ${msg}`, 3500)
-      }
+      showToast(`Delete failed: ${msg}`, 3500)
     } finally {
       setLoading(false)
     }

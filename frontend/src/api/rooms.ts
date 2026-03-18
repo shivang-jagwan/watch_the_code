@@ -47,8 +47,8 @@ export async function createRoom(payload: RoomCreate): Promise<Room> {
   })
 }
 
-export async function deleteRoom(id: string): Promise<{ ok: true }> {
-  return apiFetch<{ ok: true }>(`/api/rooms/${id}`, { method: 'DELETE' })
+export async function deleteRoom(id: string, force = false): Promise<{ ok: true }> {
+  return apiFetch<{ ok: true }>(`/api/rooms/${id}?force=${String(force)}`, { method: 'DELETE' })
 }
 
 export async function putRoom(id: string, payload: RoomPut): Promise<Room> {

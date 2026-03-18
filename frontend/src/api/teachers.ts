@@ -48,8 +48,8 @@ export async function createTeacher(payload: TeacherCreate): Promise<Teacher> {
   })
 }
 
-export async function deleteTeacher(id: string): Promise<{ ok: true }> {
-  return apiFetch<{ ok: true }>(`/api/teachers/${id}`, { method: 'DELETE' })
+export async function deleteTeacher(id: string, force = false): Promise<{ ok: true }> {
+  return apiFetch<{ ok: true }>(`/api/teachers/${id}?force=${String(force)}`, { method: 'DELETE' })
 }
 
 export async function updateTeacher(id: string, payload: TeacherPut): Promise<Teacher> {

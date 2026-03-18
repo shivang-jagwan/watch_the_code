@@ -83,6 +83,7 @@ export async function toggleLunchBreak(slotId: string): Promise<AdminActionResul
 
 export type ClearTimetablesRequest = {
   confirm: string
+  program_code?: string | null
   academic_year_number?: number | null
 }
 

@@ -67,6 +67,7 @@ export function Dashboard() {
     try {
       const result = await clearTimetables({
         confirm: 'DELETE',
+        program_code: programCode.trim(),
         academic_year_number: academicYearNumber,
       })
       if (result.ok) {

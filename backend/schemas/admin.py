@@ -100,6 +100,8 @@ class SetDefaultSectionWindowsRequest(BaseModel):
 class ClearTimetablesRequest(BaseModel):
     # Safety guard: require explicit confirmation.
     confirm: str = Field(min_length=1)
+    # Optional: clear only one program code.
+    program_code: str | None = Field(default=None, min_length=1)
     # Optional: clear only one academic year (1-4). If omitted, clears all years.
     academic_year_number: int | None = Field(default=None, ge=1, le=4)
 

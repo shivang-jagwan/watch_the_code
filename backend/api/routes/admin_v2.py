@@ -514,6 +514,8 @@ def clear_timetables(
     stmt = where_tenant(stmt, TimetableRun, tenant_id)
     if year_id is not None:
         stmt = stmt.where(TimetableRun.academic_year_id == year_id)
+    if payload.program_code is not None and payload.program_code.strip():
+        stmt = stmt.where(TimetableRun.parameters["program_code"].astext == payload.program_code.strip())
 
     deleted = db.execute(stmt).rowcount or 0
     db.commit()

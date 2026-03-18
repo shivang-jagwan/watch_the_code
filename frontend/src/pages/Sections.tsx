@@ -181,7 +181,15 @@ export function Sections() {
       showToast('Section deleted')
       await refresh()
     } catch (e: any) {
-      showToast(`Delete failed: ${String(e?.message ?? e)}`, 3500)
+      const msg = String(e?.message ?? e)
+      if (msg.includes('DELETE_BLOCKED')) {
+        showToast(
+          'Cannot delete section: it is used in timetable or assignments. Remove linked data first, then retry.',
+          5000,
+        )
+      } else {
+        showToast(`Delete failed: ${msg}`, 3500)
+      }
     } finally {
       setLoading(false)
     }

@@ -174,22 +174,15 @@ export function Sections() {
   }
 
   async function onDelete(id: string) {
-    if (!confirm('Delete this section?')) return
+    if (!confirm('Delete this section and all its dependent data? This cannot be undone.')) return
     setLoading(true)
     try {
-      await deleteSection(id)
-      showToast('Section deleted')
+      await deleteSection(id, true)
+      showToast('Section and dependent data deleted')
       await refresh()
     } catch (e: any) {
       const msg = String(e?.message ?? e)
-      if (msg.includes('DELETE_BLOCKED')) {
-        showToast(
-          'Cannot delete section: it is used in timetable or assignments. Remove linked data first, then retry.',
-          5000,
-        )
-      } else {
-        showToast(`Delete failed: ${msg}`, 3500)
-      }
+      showToast(`Delete failed: ${msg}`, 3500)
     } finally {
       setLoading(false)
     }

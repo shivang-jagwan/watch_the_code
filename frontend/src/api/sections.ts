@@ -71,8 +71,8 @@ export async function createSection(payload: SectionCreate): Promise<Section> {
   })
 }
 
-export async function deleteSection(id: string): Promise<{ ok: true }> {
-  return apiFetch<{ ok: true }>(`/api/sections/${id}`, { method: 'DELETE' })
+export async function deleteSection(id: string, force = false): Promise<{ ok: true }> {
+  return apiFetch<{ ok: true }>(`/api/sections/${id}?force=${String(force)}`, { method: 'DELETE' })
 }
 
 export async function putSectionStrength(id: string, payload: SectionStrengthPut): Promise<Section> {

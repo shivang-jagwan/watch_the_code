@@ -5,7 +5,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -423,6 +423,7 @@ def delete_section_subject(
 @router.delete("/{section_id}")
 def delete_section(
     section_id: uuid.UUID,
+    force: bool = Query(default=False),
     _admin=Depends(require_admin),
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
@@ -432,7 +433,7 @@ def delete_section(
         raise HTTPException(status_code=404, detail="SECTION_NOT_FOUND")
 
     flags = _section_usage_flags(db, section_id=section_id, tenant_id=tenant_id)
-    if any(flags.values()):
+    if any(flags.values()) and not force:
         raise HTTPException(
             status_code=409,
             detail={
@@ -443,13 +444,45 @@ def delete_section(
                     "Cannot delete section",
                     "Used in timetable or assignments",
                     f"Usage: {flags}",
+                    "Retry with ?force=true to delete section and dependent records",
                 ],
             },
         )
 
+    if force:
+        deleted: dict[str, int] = {}
+
+        stmt_entries = where_tenant(delete(TimetableEntry).where(TimetableEntry.section_id == section_id), TimetableEntry, tenant_id)
+        deleted["timetable_entries"] = db.execute(stmt_entries).rowcount or 0
+
+        stmt_fixed = where_tenant(delete(FixedTimetableEntry).where(FixedTimetableEntry.section_id == section_id), FixedTimetableEntry, tenant_id)
+        deleted["fixed_timetable_entries"] = db.execute(stmt_fixed).rowcount or 0
+
+        stmt_special = where_tenant(delete(SpecialAllotment).where(SpecialAllotment.section_id == section_id), SpecialAllotment, tenant_id)
+        deleted["special_allotments"] = db.execute(stmt_special).rowcount or 0
+
+        stmt_section_subjects = where_tenant(delete(SectionSubject).where(SectionSubject.section_id == section_id), SectionSubject, tenant_id)
+        deleted["section_subjects"] = db.execute(stmt_section_subjects).rowcount or 0
+
+        stmt_windows = where_tenant(delete(SectionTimeWindow).where(SectionTimeWindow.section_id == section_id), SectionTimeWindow, tenant_id)
+        deleted["section_time_windows"] = db.execute(stmt_windows).rowcount or 0
+
+        stmt_combined_v2 = where_tenant(delete(CombinedGroupSection).where(CombinedGroupSection.section_id == section_id), CombinedGroupSection, tenant_id)
+        deleted["combined_group_sections"] = db.execute(stmt_combined_v2).rowcount or 0
+
+        stmt_combined_legacy = where_tenant(delete(CombinedSubjectSection).where(CombinedSubjectSection.section_id == section_id), CombinedSubjectSection, tenant_id)
+        deleted["combined_subject_sections"] = db.execute(stmt_combined_legacy).rowcount or 0
+
+        stmt_elective = where_tenant(delete(SectionElectiveBlock).where(SectionElectiveBlock.section_id == section_id), SectionElectiveBlock, tenant_id)
+        deleted["section_elective_blocks"] = db.execute(stmt_elective).rowcount or 0
+
+        db.delete(section)
+        db.commit()
+        return {"ok": True, "force": True, "deleted": deleted}
+
     section.is_active = False
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "force": False}
 
 
 @router.get("/{section_id}/time-window", response_model=ListSectionTimeWindowsResponse)

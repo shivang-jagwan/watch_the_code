@@ -886,12 +886,33 @@ def list_runs(
     db: Session = Depends(get_db),
     tenant_id: uuid.UUID | None = Depends(get_tenant_id),
 ):
+    def _normalized_params(run: TimetableRun) -> dict[str, Any]:
+        params = dict(run.parameters or {})
+
+        # Backfill scope for legacy runs so UI filters remain stable.
+        raw_scope = str(params.get("scope") or params.get("run_scope") or "").strip().upper()
+        if raw_scope in {"PROGRAM_GLOBAL", "YEAR_ONLY"}:
+            params["scope"] = raw_scope
+        else:
+            params["scope"] = "YEAR_ONLY" if params.get("academic_year_number") is not None else "PROGRAM_GLOBAL"
+
+        # Backfill solver_type for older runs that only have solver_version metadata.
+        if not params.get("solver_type"):
+            solver_version = str(run.solver_version or "").strip().upper()
+            run_name = str(params.get("run_name") or "").strip().upper()
+            if "GA+CP-SAT" in solver_version or "HYBRID" in run_name:
+                params["solver_type"] = "HYBRID"
+            elif "CP-SAT" in solver_version:
+                params["solver_type"] = "CP_SAT_ONLY"
+
+        return params
+
     q_runs = where_tenant(select(TimetableRun), TimetableRun, tenant_id).order_by(TimetableRun.created_at.desc()).limit(limit)
     rows = db.execute(q_runs).scalars().all()
 
     runs: list[RunSummary] = []
     for r in rows:
-        params = r.parameters or {}
+        params = _normalized_params(r)
         if program_code is not None and params.get("program_code") != program_code:
             continue
         if academic_year_number is not None and params.get("academic_year_number") != academic_year_number:
@@ -922,6 +943,21 @@ def get_run(
     if run is None:
         raise HTTPException(status_code=404, detail="RUN_NOT_FOUND")
 
+    params = dict(run.parameters or {})
+    raw_scope = str(params.get("scope") or params.get("run_scope") or "").strip().upper()
+    if raw_scope in {"PROGRAM_GLOBAL", "YEAR_ONLY"}:
+        params["scope"] = raw_scope
+    else:
+        params["scope"] = "YEAR_ONLY" if params.get("academic_year_number") is not None else "PROGRAM_GLOBAL"
+
+    if not params.get("solver_type"):
+        solver_version = str(run.solver_version or "").strip().upper()
+        run_name = str(params.get("run_name") or "").strip().upper()
+        if "GA+CP-SAT" in solver_version or "HYBRID" in run_name:
+            params["solver_type"] = "HYBRID"
+        elif "CP-SAT" in solver_version:
+            params["solver_type"] = "CP_SAT_ONLY"
+
     q_conflicts_total = where_tenant(
         select(func.count(TimetableConflict.id)).where(TimetableConflict.run_id == run_id),
         TimetableConflict,
@@ -942,7 +978,7 @@ def get_run(
         status=str(run.status),
         solver_version=run.solver_version,
         seed=run.seed,
-        parameters=run.parameters or {},
+        parameters=params,
         notes=run.notes,
         conflicts_total=int(conflicts_total),
         entries_total=int(entries_total),
@@ -2070,30 +2106,45 @@ def _global_solve_body(
             db.commit()
             return
 
+        selected_ay = None
+        selected_ay_id = None
+        if payload.academic_year_number is not None:
+            selected_ay = _get_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id)
+            selected_ay_id = selected_ay.id
+
         q_sections = (
             select(Section)
             .where(Section.program_id == program.id)
             .where(Section.is_active.is_(True))
         )
+        if selected_ay_id is not None:
+            q_sections = q_sections.where(Section.academic_year_id == selected_ay_id)
         q_sections = where_tenant(q_sections, Section, tenant_id).order_by(Section.code)
         sections = db.execute(q_sections).scalars().all()
         if not sections:
             run.status = "VALIDATION_FAILED"
             run.parameters = {**(run.parameters or {}), "run_status": "FAILED"}
-            run.notes = f"No active sections for program {payload.program_code!r}."
+            if payload.academic_year_number is not None:
+                run.notes = (
+                    f"No active sections for program {payload.program_code!r} "
+                    f"year {int(payload.academic_year_number)}."
+                )
+            else:
+                run.notes = f"No active sections for program {payload.program_code!r}."
             db.commit()
             return
 
         run.parameters = {
             **(run.parameters or {}),
             "academic_year_ids": sorted({str(s.academic_year_id) for s in sections}),
+            **({"academic_year_number": int(payload.academic_year_number)} if payload.academic_year_number is not None else {}),
         }
 
         prereq_conflicts = validate_prereqs(
             db,
             run=run,
             program_id=program.id,
-            academic_year_id=None,
+            academic_year_id=selected_ay_id,
             sections=sections,
         )
         errors = [c for c in prereq_conflicts if str(c.severity).upper() != "WARN"]
@@ -2109,7 +2160,7 @@ def _global_solve_body(
             cap_data = build_capacity_data(
                 db,
                 program_id=program.id,
-                academic_year_id=None,
+                academic_year_id=selected_ay_id,
                 sections=sections,
                 tenant_id=tenant_id,
             )
@@ -2194,49 +2245,137 @@ def _global_solve_body(
             }
             if "cp_sat_max_time_seconds" not in cfg_overrides:
                 cfg_overrides["cp_sat_max_time_seconds"] = min(float(max_time_seconds), 5.0)
-
-            dual = run_and_persist_dual_solver(
-                db,
-                run=run,
-                program_id=program.id,
-                tenant_id=tenant_id,
-                solver_type=solver_type,
-                config_overrides=cfg_overrides,
-            )
-
-            # Merge additional diagnostics for run polling consumers.
-            run.parameters = {
-                **(run.parameters or {}),
-                "_solver_result": {
-                    **((run.parameters or {}).get("_solver_result") or {}),
-                    "diagnostics": capacity_diagnostics,
-                    "message": "Dual-solver run completed",
-                },
-            }
-            db.commit()
-        else:
-            result = solve_program_global(
-                db,
-                run=run,
-                program_id=program.id,
-                seed=payload.seed,
-                max_time_seconds=max_time_seconds,
-                enforce_teacher_load_limits=not payload.relax_teacher_load_limits,
-                require_optimal=payload.require_optimal,
-                allow_extended_solve=getattr(payload, "allow_extended_solve", False),
-            )
-
-            # Persist solver stats so the polling endpoint can surface them.
             try:
+                run_and_persist_dual_solver(
+                    db,
+                    run=run,
+                    program_id=program.id,
+                    tenant_id=tenant_id,
+                    solver_type=solver_type,
+                    academic_year_id=selected_ay_id,
+                    config_overrides=cfg_overrides,
+                )
+
+                # Merge additional diagnostics for run polling consumers.
                 run.parameters = {
                     **(run.parameters or {}),
                     "_solver_result": {
+                        **((run.parameters or {}).get("_solver_result") or {}),
+                        "diagnostics": capacity_diagnostics,
+                        "message": "Dual-solver run completed",
+                    },
+                }
+                db.commit()
+            except RuntimeError as exc:
+                if "initial feasible population" not in str(exc).lower():
+                    raise
+
+                logger.warning(
+                    "hybrid_init_failed_fallback_to_cpsat run_id=%s tenant_id=%s program_code=%s year=%s error=%s",
+                    str(run.id),
+                    str(tenant_id) if tenant_id is not None else "shared",
+                    str(payload.program_code),
+                    str(payload.academic_year_number) if payload.academic_year_number is not None else "all",
+                    str(exc),
+                )
+
+                if selected_ay_id is not None:
+                    result = solve_program_year(
+                        db,
+                        run=run,
+                        program_id=program.id,
+                        academic_year_id=selected_ay_id,
+                        seed=payload.seed,
+                        max_time_seconds=max_time_seconds,
+                        enforce_teacher_load_limits=not payload.relax_teacher_load_limits,
+                        require_optimal=payload.require_optimal,
+                        allow_extended_solve=getattr(payload, "allow_extended_solve", False),
+                    )
+                else:
+                    result = solve_program_global(
+                        db,
+                        run=run,
+                        program_id=program.id,
+                        seed=payload.seed,
+                        max_time_seconds=max_time_seconds,
+                        enforce_teacher_load_limits=not payload.relax_teacher_load_limits,
+                        require_optimal=payload.require_optimal,
+                        allow_extended_solve=getattr(payload, "allow_extended_solve", False),
+                    )
+
+                hard_ok = str(result.status) in {"OPTIMAL", "FEASIBLE", "SUBOPTIMAL"}
+                run.parameters = {
+                    **(run.parameters or {}),
+                    "run_status": "COMPLETED" if hard_ok else "FAILED",
+                    "run_name": "CP-SAT (fallback)",
+                    "solver_type": "CP_SAT_ONLY",
+                    "_solver_result": {
+                        "run_name": "CP-SAT (fallback)",
+                        "solver_type": "CP_SAT_ONLY",
+                        "run_status": "COMPLETED" if hard_ok else "FAILED",
                         "objective_score": getattr(result, "objective_score", None),
                         "solver_stats": getattr(result, "solver_stats", {}) or {},
                         "best_bound": getattr(result, "best_objective_bound", None),
                         "optimality_gap": getattr(result, "optimality_gap", None),
                         "solve_time_seconds": getattr(result, "solve_time_seconds", None),
                         "entries_written": result.entries_written,
+                        "hard_constraints_satisfied": hard_ok,
+                        "cp_sat_repair_applied": False,
+                        "reason_summary": "Hybrid initialization failed; fell back to CP-SAT.",
+                        "warnings": (getattr(result, "warnings", []) or []) + [
+                            "Hybrid initialization failed; CP-SAT fallback used."
+                        ],
+                        "diagnostics": capacity_diagnostics,
+                        "message": getattr(result, "message", None),
+                        "fallback_from": solver_type,
+                    },
+                }
+                db.commit()
+        else:
+            if selected_ay_id is not None:
+                result = solve_program_year(
+                    db,
+                    run=run,
+                    program_id=program.id,
+                    academic_year_id=selected_ay_id,
+                    seed=payload.seed,
+                    max_time_seconds=max_time_seconds,
+                    enforce_teacher_load_limits=not payload.relax_teacher_load_limits,
+                    require_optimal=payload.require_optimal,
+                    allow_extended_solve=getattr(payload, "allow_extended_solve", False),
+                )
+            else:
+                result = solve_program_global(
+                    db,
+                    run=run,
+                    program_id=program.id,
+                    seed=payload.seed,
+                    max_time_seconds=max_time_seconds,
+                    enforce_teacher_load_limits=not payload.relax_teacher_load_limits,
+                    require_optimal=payload.require_optimal,
+                    allow_extended_solve=getattr(payload, "allow_extended_solve", False),
+                )
+
+            # Persist solver stats so the polling endpoint can surface them.
+            try:
+                hard_ok = str(result.status) in {"OPTIMAL", "FEASIBLE", "SUBOPTIMAL"}
+                run.parameters = {
+                    **(run.parameters or {}),
+                    "run_status": "COMPLETED" if hard_ok else "FAILED",
+                    "run_name": "CP-SAT",
+                    "solver_type": "CP_SAT_ONLY",
+                    "_solver_result": {
+                        "run_name": "CP-SAT",
+                        "solver_type": "CP_SAT_ONLY",
+                        "run_status": "COMPLETED" if hard_ok else "FAILED",
+                        "objective_score": getattr(result, "objective_score", None),
+                        "solver_stats": getattr(result, "solver_stats", {}) or {},
+                        "best_bound": getattr(result, "best_objective_bound", None),
+                        "optimality_gap": getattr(result, "optimality_gap", None),
+                        "solve_time_seconds": getattr(result, "solve_time_seconds", None),
+                        "entries_written": result.entries_written,
+                        "hard_constraints_satisfied": hard_ok,
+                        "cp_sat_repair_applied": False,
                         "reason_summary": getattr(result, "reason_summary", None),
                         "warnings": getattr(result, "warnings", []) or [],
                         "diagnostics": (capacity_diagnostics + (getattr(result, "diagnostics", []) or [])),
@@ -2281,21 +2420,34 @@ def solve_timetable_global(
 
         validate_db_connection(db)
 
+        selected_ay = None
+        if payload.academic_year_number is not None:
+            selected_ay = _get_academic_year(db, int(payload.academic_year_number), tenant_id=tenant_id)
+
         run = TimetableRun(
             tenant_id=tenant_id,
-            academic_year_id=None,
+            academic_year_id=(selected_ay.id if selected_ay is not None else None),
             seed=payload.seed,
             status="CREATED",
-            solver_version=("GA" if str(payload.solver_type).upper() == "GA_ONLY" else "GA+CP-SAT"),
+            solver_version=(
+                "GA"
+                if str(payload.solver_type).upper() == "GA_ONLY"
+                else ("GA+CP-SAT" if str(payload.solver_type).upper() == "HYBRID" else "CP-SAT")
+            ),
             parameters={
                 "program_code": payload.program_code,
                 "max_time_seconds": max_time_seconds,
                 "relax_teacher_load_limits": payload.relax_teacher_load_limits,
                 "require_optimal": payload.require_optimal,
                 "solver_type": payload.solver_type,
-                "run_name": ("GA" if str(payload.solver_type).upper() == "GA_ONLY" else "GA+CP-SAT"),
+                "run_name": (
+                    "GA"
+                    if str(payload.solver_type).upper() == "GA_ONLY"
+                    else ("GA+CP-SAT" if str(payload.solver_type).upper() == "HYBRID" else "CP-SAT")
+                ),
                 "run_status": "RUNNING",
-                "scope": "PROGRAM_GLOBAL",
+                "scope": ("YEAR_ONLY" if payload.academic_year_number is not None else "PROGRAM_GLOBAL"),
+                **({"academic_year_number": int(payload.academic_year_number)} if payload.academic_year_number is not None else {}),
                 **({"tenant_id": str(tenant_id)} if tenant_id is not None else {}),
             },
         )
@@ -2314,7 +2466,11 @@ def solve_timetable_global(
             run_id=run_id,
             status="RUNNING",
             entries_written=0,
-            run_name=("GA" if str(payload.solver_type).upper() == "GA_ONLY" else "GA+CP-SAT"),
+            run_name=(
+                "GA"
+                if str(payload.solver_type).upper() == "GA_ONLY"
+                else ("GA+CP-SAT" if str(payload.solver_type).upper() == "HYBRID" else "CP-SAT")
+            ),
             solver_type=payload.solver_type,
         )
 

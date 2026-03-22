@@ -92,11 +92,11 @@ class Settings(BaseSettings):
     )
 
     # Multi-tenant / data isolation
-    # - shared: all admins see the same data (current behavior)
+    # - shared: all admins see the same data
     # - per_user: data is scoped to the current user's tenant (default: user.id)
     # - per_tenant: data is scoped to current_user.tenant_id (strict isolation)
     tenant_mode: str = Field(
-        default="shared",
+        default="per_user",
         validation_alias=AliasChoices("tenant_mode", "TENANT_MODE"),
     )
 

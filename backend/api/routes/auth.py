@@ -99,8 +99,8 @@ def _resolve_tenant_id_for_auth(
                 return distinct[0]
             if len(distinct) > 1:
                 raise HTTPException(status_code=401, detail="TENANT_REQUIRED")
-
-        hint = "default"
+        # No tenant hint and no unique user inference.
+        raise HTTPException(status_code=401, detail="TENANT_REQUIRED")
 
     q = select(Tenant.id).where(func.lower(Tenant.slug) == func.lower(hint))
     row = db.execute(q).first()

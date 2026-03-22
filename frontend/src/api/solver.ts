@@ -41,9 +41,11 @@ export type SolveTimetableResponse = {
   entries_written: number
   conflicts: SolverConflict[]
   run_name?: string | null
-  solver_type?: 'GA_ONLY' | 'HYBRID' | null
+  solver_type?: 'GA_ONLY' | 'HYBRID' | 'CP_SAT_ONLY' | null
   best_fitness?: number | null
   generation_count?: number | null
+  hard_constraints_satisfied?: boolean | null
+  cp_sat_repair_applied?: boolean | null
 
   reason_summary?: string | null
   diagnostics?: Record<string, any>[]
@@ -88,7 +90,8 @@ export type SolveTimetableRequest = {
 
 export type SolveGlobalTimetableRequest = {
   program_code: string
-  solver_type?: 'GA_ONLY' | 'HYBRID'
+  academic_year_number?: number
+  solver_type?: 'GA_ONLY' | 'HYBRID' | 'CP_SAT_ONLY'
   seed?: number | null
   max_time_seconds?: number
   relax_teacher_load_limits?: boolean
@@ -154,6 +157,7 @@ export async function solveTimetableGlobal(payload: SolveGlobalTimetableRequest)
     method: 'POST',
     body: JSON.stringify({
       program_code: payload.program_code,
+      academic_year_number: payload.academic_year_number,
       solver_type: payload.solver_type ?? 'HYBRID',
       seed: payload.seed ?? null,
       max_time_seconds: payload.max_time_seconds ?? 300,

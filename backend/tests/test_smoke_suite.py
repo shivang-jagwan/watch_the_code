@@ -696,7 +696,8 @@ class TestAPIEndpoints:
         assert len(run_entries) > 0, "Solver produced zero entries"
 
     def test_unauthenticated_request_rejected(self, client: TestClient) -> None:
-        resp = client.get("/api/solver/runs")
+        with TestClient(create_app()) as unauth_client:
+            resp = unauth_client.get("/api/solver/runs")
         assert resp.status_code in {401, 403}
 
 

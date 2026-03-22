@@ -26,6 +26,22 @@ let _redirectingToLogin = false
 function handleUnauthorized(): void {
   setAccessTokenInternal(null)
   if (typeof window === 'undefined') return
+
+  // Best-effort: clear HttpOnly auth cookies on the server side too.
+  // This prevents stale cookie loops after tenant/session changes.
+  try {
+    fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      keepalive: true,
+    }).catch(() => {
+      // ignore
+    })
+  } catch {
+    // ignore
+  }
+
   if (_redirectingToLogin) return
   if (window.location.pathname === '/login') return
   _redirectingToLogin = true

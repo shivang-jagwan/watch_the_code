@@ -35,7 +35,8 @@ class SolveTimetableRequest(GenerateTimetableRequest):
 
 
 class SolveGlobalTimetableRequest(GenerateGlobalTimetableRequest):
-    solver_type: Literal["GA_ONLY", "HYBRID"] = "HYBRID"
+    academic_year_number: int | None = Field(default=None, ge=1, le=4)
+    solver_type: Literal["GA_ONLY", "HYBRID", "CP_SAT_ONLY"] = "HYBRID"
     max_time_seconds: float = Field(default=300.0, gt=0)
     relax_teacher_load_limits: bool = False
     require_optimal: bool = True
@@ -101,9 +102,11 @@ class SolveTimetableResponse(BaseModel):
     solve_time_seconds: float | None = None
     message: str | None = None
     run_name: str | None = None
-    solver_type: Literal["GA_ONLY", "HYBRID"] | None = None
+    solver_type: Literal["GA_ONLY", "HYBRID", "CP_SAT_ONLY"] | None = None
     best_fitness: float | None = None
     generation_count: int | None = None
+    hard_constraints_satisfied: bool | None = None
+    cp_sat_repair_applied: bool | None = None
 
 
 class RunSummary(BaseModel):

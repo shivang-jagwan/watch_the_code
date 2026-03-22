@@ -46,12 +46,15 @@ def build_problem_data_from_db(
     *,
     program_id,
     tenant_id,
+    academic_year_id=None,
 ) -> dict[str, Any]:
     q_sections = (
         select(Section)
         .where(Section.program_id == program_id)
         .where(Section.is_active.is_(True))
     )
+    if academic_year_id is not None:
+        q_sections = q_sections.where(Section.academic_year_id == academic_year_id)
     q_sections = where_tenant(q_sections, Section, tenant_id).order_by(Section.code)
     sections = db.execute(q_sections).scalars().all()
 
@@ -159,6 +162,14 @@ def build_problem_data_from_db(
         if ss.subject_id in subject_ids:
             by_section[ss.section_id].append(ss.subject_id)
 
+    # Some tenants are seeded with teacher-section-subject mappings but no
+    # section_subject rows. In that case, derive allowed subjects from active
+    # TSS rows so hybrid solving can still build a valid curriculum.
+    fallback_by_section: dict[Any, list[Any]] = defaultdict(list)
+    for row in tss_rows:
+        if row.subject_id in subject_ids and bool(getattr(row, "is_active", True)):
+            fallback_by_section[row.section_id].append(row.subject_id)
+
     q_section_windows = where_tenant(select(SectionTimeWindow), SectionTimeWindow, tenant_id)
     sw_rows = db.execute(q_section_windows).scalars().all()
     windows_by_section: dict[Any, list[SectionTimeWindow]] = defaultdict(list)
@@ -169,6 +180,9 @@ def build_problem_data_from_db(
     for sec in sections:
         curriculum = []
         allowed_subjects = by_section.get(sec.id, [])
+        if not allowed_subjects:
+            allowed_subjects = fallback_by_section.get(sec.id, [])
+        allowed_subjects = sorted({sid for sid in allowed_subjects}, key=lambda x: str(x))
         for subj_id in allowed_subjects:
             tid = teacher_by_section_subject.get((sec.id, subj_id))
             if tid is None:
@@ -223,12 +237,18 @@ def run_and_persist_dual_solver(
     program_id,
     tenant_id,
     solver_type: Literal["GA_ONLY", "HYBRID"],
+    academic_year_id=None,
     config_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if solver_type not in {"GA_ONLY", "HYBRID"}:
         raise ValueError(f"Unsupported solver_type: {solver_type}")
 
-    data = build_problem_data_from_db(db, program_id=program_id, tenant_id=tenant_id)
+    data = build_problem_data_from_db(
+        db,
+        program_id=program_id,
+        tenant_id=tenant_id,
+        academic_year_id=academic_year_id,
+    )
     cfg_data = dict(config_overrides or {})
     cfg_data["solver_type"] = solver_type
     cfg = EvolutionConfig(**cfg_data)
@@ -246,23 +266,52 @@ def run_and_persist_dual_solver(
     slots = db.execute(q_slots).scalars().all()
     slot_by_pair = {(int(s.day_of_week), int(s.slot_index)): s.id for s in slots}
 
+    occupied_section_slot: set[tuple[uuid.UUID, Any]] = set()
+    occupied_teacher_slot: set[tuple[uuid.UUID, Any]] = set()
+    occupied_room_slot: set[tuple[uuid.UUID, Any]] = set()
+    dropped_collision_count = 0
+    inserted_entries = 0
+
     for g in result.best_chromosome.genes:
         slot_id = slot_by_pair.get((int(g.day), int(g.period)))
         sec_year = year_by_section.get(str(g.class_id))
         if slot_id is None or sec_year is None:
             continue
 
+        section_uuid = uuid.UUID(str(g.class_id))
+        teacher_uuid = uuid.UUID(str(g.teacher_id))
+        room_uuid = uuid.UUID(str(g.room_id))
+        dedupe_key = (section_uuid, slot_id)
+        if dedupe_key in occupied_section_slot:
+            dropped_collision_count += 1
+            continue
+
+        teacher_slot_key = (teacher_uuid, slot_id)
+        if teacher_slot_key in occupied_teacher_slot:
+            dropped_collision_count += 1
+            continue
+
+        room_slot_key = (room_uuid, slot_id)
+        if room_slot_key in occupied_room_slot:
+            dropped_collision_count += 1
+            continue
+
+        occupied_section_slot.add(dedupe_key)
+        occupied_teacher_slot.add(teacher_slot_key)
+        occupied_room_slot.add(room_slot_key)
+
         entry = TimetableEntry(
             tenant_id=tenant_id,
             run_id=run.id,
             academic_year_id=sec_year,
-            section_id=uuid.UUID(str(g.class_id)),
+            section_id=section_uuid,
             subject_id=uuid.UUID(str(g.subject_id)),
-            teacher_id=uuid.UUID(str(g.teacher_id)),
-            room_id=uuid.UUID(str(g.room_id)),
+            teacher_id=teacher_uuid,
+            room_id=room_uuid,
             slot_id=slot_id,
         )
         db.add(entry)
+        inserted_entries += 1
 
     b = result.best_breakdown
     hard_conflicts = int(b.teacher_conflicts + b.room_conflicts + b.class_conflicts + b.exclusive_room_violations)
@@ -284,6 +333,23 @@ def run_and_persist_dual_solver(
             )
         )
 
+    if dropped_collision_count > 0:
+        db.add(
+            TimetableConflict(
+                tenant_id=tenant_id,
+                run_id=run.id,
+                severity="WARN",
+                conflict_type="GA_SLOT_COLLISIONS_DROPPED",
+                message=(
+                    f"Dropped {dropped_collision_count} duplicate section/teacher/room slot assignments "
+                    "while persisting GA timetable."
+                ),
+                metadata_json={
+                    "dropped_count": dropped_collision_count,
+                },
+            )
+        )
+
     run_name = "GA" if solver_type == "GA_ONLY" else "GA+CP-SAT"
     run.status = "OPTIMAL" if hard_conflicts == 0 else "FEASIBLE"
     run.solver_version = run_name
@@ -298,7 +364,8 @@ def run_and_persist_dual_solver(
             "run_status": "COMPLETED",
             "best_fitness": result.best_fitness,
             "generation_count": result.generations_ran,
-            "entries_written": len(result.best_chromosome.genes),
+            "cp_sat_repair_applied": solver_type == "HYBRID",
+            "entries_written": inserted_entries,
             "breakdown": b.__dict__,
             "history_best": list(result.history_best),
             "history_mean": list(result.history_mean),

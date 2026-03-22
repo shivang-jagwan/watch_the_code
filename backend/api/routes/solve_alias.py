@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 class SolveAliasRequest(BaseModel):
-    solver_type: Literal["GA_ONLY", "HYBRID"]
+    solver_type: Literal["GA_ONLY", "HYBRID", "CP_SAT_ONLY"]
     # Optional for strict-compat: if omitted and tenant has exactly one program,
     # that program is auto-selected.
     program_code: str | None = None

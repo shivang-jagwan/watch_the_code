@@ -76,7 +76,9 @@ def evaluate_chromosome(
     )
 
     penalty = breakdown.total_penalty()
-    fitness = max(0.0, float(max_score) - float(penalty))
+    # Preserve score resolution even for heavy-penalty timetables so GA history
+    # and best fitness remain informative (instead of collapsing to 0.0).
+    fitness = float(max_score) - float(penalty)
     hard_ok = (
         teacher_conflicts == 0
         and room_conflicts == 0

@@ -108,7 +108,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   })
 
   // Automatic token refresh on 401
-  if (res.status === 401 && !path.includes('/auth/refresh') && !path.includes('/auth/login')) {
+  if (res.status === 401 && !!token && !path.includes('/auth/refresh') && !path.includes('/auth/login')) {
     if (!_refreshPromise) {
       _refreshPromise = _tryRefresh().finally(() => { _refreshPromise = null })
     }

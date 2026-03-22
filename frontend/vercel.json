@@ -2,11 +2,11 @@
   "rewrites": [
     {
       "source": "/api/health",
-      "destination": "https://time-table-management-alna.onrender.com/health"
+      "destination": "https://watch-the-code.onrender.com/health"
     },
     {
       "source": "/api/(.*)",
-      "destination": "https://time-table-management-alna.onrender.com/api/$1"
+      "destination": "https://watch-the-code.onrender.com/api/$1"
     },
     {
       "source": "/(.*)",
